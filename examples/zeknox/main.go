@@ -19,7 +19,7 @@ import (
 )
 
 type sha3Circuit struct {
-	In       []uints.U8 `gnark:",secret"`
+	In       []uints.U8   `gnark:",secret"`
 	Expected [32]uints.U8 `gnark:",public"`
 }
 
@@ -90,25 +90,32 @@ func main() {
 		panic(err)
 	}
 
-	// GPU Prove & Verify
-	start := time.Now()
-	proofZeknox, err := groth16.Prove(r1cs, pk, witnessData, backend.WithZeknoxAcceleration())
-	if err != nil {
-		panic(err)
-	}
-	log.Printf("zeknox GPU prove: %d ms", time.Since(start).Milliseconds())
-	if err := groth16.Verify(proofZeknox, vk, publicWitness); err != nil {
-		panic(err)
-	}
+	for i := 0; i < 30; i++ {
+		// CPU Prove & Verify
+		log.Printf("------ CPU Prove %d ------\n", i+1)
+		start := time.Now()
+		proof, err := groth16.Prove(r1cs, pk, witnessData)
+		if err != nil {
+			panic(err)
+		}
+		log.Printf("CPU prove: %d ms", time.Since(start).Milliseconds())
+		if err := groth16.Verify(proof, vk, publicWitness); err != nil {
+			panic(err)
+		}
 
-	// CPU Prove & Verify
-	start = time.Now()
-	proof, err := groth16.Prove(r1cs, pk, witnessData)
-	if err != nil {
-		panic(err)
-	}
-	log.Printf("CPU prove: %d ms", time.Since(start).Milliseconds())
-	if err := groth16.Verify(proof, vk, publicWitness); err != nil {
-		panic(err)
+		log.Printf("------ GPU Prove %d ------\n", i+1)
+
+		// GPU Prove & Verify
+		start = time.Now()
+		proofZeknox, err := groth16.Prove(r1cs, pk, witnessData, backend.WithZeknoxAcceleration())
+		if err != nil {
+			panic(err)
+		}
+		log.Printf("zeknox GPU prove: %d ms", time.Since(start).Milliseconds())
+		if err := groth16.Verify(proofZeknox, vk, publicWitness); err != nil {
+			log.Panicf("\nError in GPU Verify %d: %s\n\n", i+1, err)
+			panic(err)
+		}
+
 	}
 }

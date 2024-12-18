@@ -368,9 +368,13 @@ func Prove(r1cs *cs.R1CS, pk *ProvingKey, fullWitness witness.Witness, opts ...b
 	// computeKRS1()
 	computeKRS2()
 	// computeBS2()
+
 	if err := g.Wait(); err != nil {
 		return nil, err
 	}
+
+	// computeKRS1_CPU()
+	// computeBS2_CPU()
 
 	// FinalKRS = KRS1 + KRS2 + s*AR + r*BS1
 	{
@@ -382,6 +386,9 @@ func Prove(r1cs *cs.R1CS, pk *ProvingKey, fullWitness witness.Witness, opts ...b
 		krs1.AddAssign(&p1)
 		proof.Krs.FromJacobian(&krs1)
 	}
+
+	fmt.Printf("Krs: %v\n", proof.Krs)
+	fmt.Printf("Ar: %v\n", proof.Ar)
 
 	log.Debug().Dur("took", time.Since(start)).Msg("prover done")
 
