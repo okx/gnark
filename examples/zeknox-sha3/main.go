@@ -14,7 +14,6 @@ import (
 	"github.com/consensys/gnark/constraint"
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/frontend/cs/r1cs"
-	"github.com/consensys/gnark/logger"
 	"github.com/consensys/gnark/std/hash/sha3"
 	"github.com/consensys/gnark/std/math/uints"
 	cryptosha3 "golang.org/x/crypto/sha3"
@@ -73,7 +72,7 @@ func generateWitness() (witness.Witness, error) {
 }
 
 func main() {
-	logger.Disable()
+	// logger.Disable()
 
 	nRuns := flag.Int("r", 5, "number of runs")
 	flag.Parse()

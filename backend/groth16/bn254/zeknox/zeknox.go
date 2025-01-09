@@ -387,8 +387,8 @@ func Prove(r1cs *cs.R1CS, pk *ProvingKey, fullWitness witness.Witness, opts ...b
 		proof.Krs.FromJacobian(&krs1)
 	}
 
-	fmt.Printf("Krs: %v\n", proof.Krs)
-	fmt.Printf("Ar: %v\n", proof.Ar)
+	// fmt.Printf("Krs: %v\n", proof.Krs)
+	// fmt.Printf("Ar: %v\n", proof.Ar)
 
 	log.Debug().Dur("took", time.Since(start)).Msg("prover done")
 
