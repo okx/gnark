@@ -3,6 +3,7 @@
 package main
 
 import (
+	"flag"
 	"log"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/consensys/gnark/constraint"
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/frontend/cs/r1cs"
+	"github.com/consensys/gnark/logger"
 	"github.com/consensys/gnark/std/hash/sha3"
 	"github.com/consensys/gnark/std/math/uints"
 	cryptosha3 "golang.org/x/crypto/sha3"
@@ -71,6 +73,12 @@ func generateWitness() (witness.Witness, error) {
 }
 
 func main() {
+	logger.Disable()
+
+	nRuns := flag.Int("r", 5, "number of runs")
+	flag.Parse()
+	log.Printf("Number of runs: %d", *nRuns)
+
 	r1cs, err := compileCircuit(r1cs.NewBuilder)
 	if err != nil {
 		panic(err)
@@ -90,32 +98,55 @@ func main() {
 		panic(err)
 	}
 
-	for i := 0; i < 30; i++ {
-		// CPU Prove & Verify
-		log.Printf("------ CPU Prove %d ------\n", i+1)
+	// GPU Prove & Verify
+	// Warmup GPU
+	proofZeknox, err := groth16.Prove(r1cs, pk, witnessData, backend.WithZeknoxAcceleration())
+	if err != nil {
+		panic(err)
+	}
+	if err := groth16.Verify(proofZeknox, vk, publicWitness); err != nil {
+		panic(err)
+	}
+	// Actual run
+	tgpu := float64(0)
+	for i := 0; i < *nRuns; i++ {
 		start := time.Now()
-		proof, err := groth16.Prove(r1cs, pk, witnessData)
+		proofZeknox, err = groth16.Prove(r1cs, pk, witnessData, backend.WithZeknoxAcceleration())
 		if err != nil {
 			panic(err)
 		}
-		log.Printf("CPU prove: %d ms", time.Since(start).Milliseconds())
+		tgpu += float64(time.Since(start).Milliseconds())
+		if err := groth16.Verify(proofZeknox, vk, publicWitness); err != nil {
+			panic(err)
+		}
+	}
+	tgpu /= float64(*nRuns)
+	log.Printf("zeknox GPU prove average time: %v ms", tgpu)
+
+	// CPU Prove & Verify
+	// Warmup CPU
+	proof, err := groth16.Prove(r1cs, pk, witnessData)
+	if err != nil {
+		panic(err)
+	}
+	if err := groth16.Verify(proof, vk, publicWitness); err != nil {
+		panic(err)
+	}
+	// Actual run
+	tcpu := float64(0)
+	for i := 0; i < *nRuns; i++ {
+		start := time.Now()
+		proof, err = groth16.Prove(r1cs, pk, witnessData)
+		if err != nil {
+			panic(err)
+		}
+		tcpu += float64(time.Since(start).Milliseconds())
 		if err := groth16.Verify(proof, vk, publicWitness); err != nil {
 			panic(err)
 		}
-
-		log.Printf("------ GPU Prove %d ------\n", i+1)
-
-		// GPU Prove & Verify
-		start = time.Now()
-		proofZeknox, err := groth16.Prove(r1cs, pk, witnessData, backend.WithZeknoxAcceleration())
-		if err != nil {
-			panic(err)
-		}
-		log.Printf("zeknox GPU prove: %d ms", time.Since(start).Milliseconds())
-		if err := groth16.Verify(proofZeknox, vk, publicWitness); err != nil {
-			log.Panicf("\nError in GPU Verify %d: %s\n\n", i+1, err)
-			panic(err)
-		}
-
 	}
+	tcpu /= float64(*nRuns)
+	log.Printf("CPU prove average time: %v ms", tcpu)
+
+	log.Printf("Speedup: %f", tcpu/tgpu)
 }
