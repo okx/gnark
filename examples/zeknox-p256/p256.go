@@ -271,7 +271,7 @@ func main() {
 	}
 	// Actual run
 	tgpu := float64(0)
-	for i := 0; i < 1; i++ {
+	for i := 0; i < *nRuns; i++ {
 		start := time.Now()
 		proof, err := groth16.Prove(r1cs, pk, witnessData, solidity.WithProverTargetSolidityVerifier(backend.GROTH16), backend.WithZeknoxAcceleration())
 		if err != nil {
