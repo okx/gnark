@@ -4,8 +4,10 @@ package zeknox_bn254
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"math/big"
+	"os"
 	"runtime"
 	"time"
 	"unsafe"
@@ -35,7 +37,7 @@ const HasZeknox = true
 // Use single GPU
 const deviceId = 0
 
-func (pk *ProvingKey) setupDevicePointers() error {
+func (pk *ProvingKey) SetupDevicePointers() error {
 	if pk.deviceInfo != nil {
 		return nil
 	}
@@ -100,6 +102,31 @@ func (pk *ProvingKey) setupDevicePointers() error {
 	return nil
 }
 
+func isValid(proof *groth16_bn254.Proof) bool {
+	if !proof.Ar.IsInSubGroup() {
+		fmt.Printf("Error: Ar is not in the subgroup\n")
+		return false
+	}
+	if !proof.Bs.IsInSubGroup() {
+		fmt.Printf("Error: Bs is not in the subgroup\n")
+		return false
+	}
+	if !proof.Krs.IsInSubGroup() {
+		fmt.Printf("Error: Krs is not in the subgroup\n")
+		return false
+	}
+	return true
+}
+
+func counter() (f func() int) {
+	var i int
+	f = func() int {
+		i++
+		return i
+	}
+	return
+}
+
 // Prove generates the proof of knowledge of a r1cs with full witness (secret + public part).
 func Prove(r1cs *cs.R1CS, pk *ProvingKey, fullWitness witness.Witness, opts ...backend.ProverOption) (*groth16_bn254.Proof, error) {
 	opt, err := backend.NewProverConfig(opts...)
@@ -115,7 +142,7 @@ func Prove(r1cs *cs.R1CS, pk *ProvingKey, fullWitness witness.Witness, opts ...b
 	log := logger.Logger().With().Str("curve", r1cs.CurveID().String()).Str("acceleration", "zeknox").Int("nbConstraints", r1cs.GetNbConstraints()).Str("backend", "groth16").Logger()
 	if pk.deviceInfo == nil {
 		start := time.Now()
-		if err := pk.setupDevicePointers(); err != nil {
+		if err := pk.SetupDevicePointers(); err != nil {
 			return nil, fmt.Errorf("setup device pointers: %w", err)
 		}
 		log.Debug().Dur("took", time.Since(start)).Msg("Copy proving key to device")
@@ -271,7 +298,6 @@ func Prove(r1cs *cs.R1CS, pk *ProvingKey, fullWitness witness.Witness, opts ...b
 		if err := gpuMsm(&ar, &pk.G1Device.A, wireA); err != nil {
 			return err
 		}
-
 		log.Debug().Dur(fmt.Sprintf("MSMG1 %d took", wireA.Len()), time.Since(startAr)).Msg("ar done")
 		ar.AddMixed(&pk.G1.Alpha)
 		ar.AddMixed(&deltas[0])
@@ -279,10 +305,12 @@ func Prove(r1cs *cs.R1CS, pk *ProvingKey, fullWitness witness.Witness, opts ...b
 		return nil
 	}
 
+	var h []fr.Element
+	sizeH := int(pk.Domain.Cardinality - 1) // comes from the fact the deg(H)=(n-1)+(n-1)-n=n-2
 	var krs2 curve.G1Jac
 	computeKRS2 := func() error {
 		// quotient poly H (witness reduction / FFT part)
-		var h []fr.Element
+		// var h []fr.Element
 		{
 			startH := time.Now()
 			h = computeH(solution.A, solution.B, solution.C, &pk.Domain)
@@ -294,7 +322,7 @@ func Prove(r1cs *cs.R1CS, pk *ProvingKey, fullWitness witness.Witness, opts ...b
 		// Copy h poly to device, since we haven't implemented FFT on device
 		var deviceH *device.HostOrDeviceSlice[fr.Element]
 		chDeviceH := make(chan *device.HostOrDeviceSlice[fr.Element], 1)
-		sizeH := int(pk.Domain.Cardinality - 1) // comes from the fact the deg(H)=(n-1)+(n-1)-n=n-2
+		// sizeH := int(pk.Domain.Cardinality - 1) // comes from the fact the deg(H)=(n-1)+(n-1)-n=n-2
 		if err := CopyToDevice(h[:sizeH], chDeviceH); err != nil {
 			return err
 		}
@@ -389,6 +417,64 @@ func Prove(r1cs *cs.R1CS, pk *ProvingKey, fullWitness witness.Witness, opts ...b
 
 	// fmt.Printf("Krs: %v\n", proof.Krs)
 	// fmt.Printf("Ar: %v\n", proof.Ar)
+
+	if !isValid(proof) {
+		fmt.Println("Proof is invalid! Saving inputs to debug ...")
+
+		time.Sleep(time.Second) // wait 1 second to ensure unique filenames
+		t := time.Now()
+		ts := t.Format("20060102150405")
+		filename := fmt.Sprintf("dump_%s.bin", ts)
+		f, err := os.Create(filename)
+		if err != nil {
+			fmt.Errorf("Couldn't open file")
+		}
+		defer f.Close()
+		// AR - wires A
+		err = binary.Write(f, binary.LittleEndian, uint64(len(wireValuesA)))
+		if err != nil {
+			fmt.Errorf("Write failed")
+		}
+		err = binary.Write(f, binary.LittleEndian, wireValuesA)
+		if err != nil {
+			fmt.Errorf("Write failed")
+		}
+		// BS1 - wires B
+		err = binary.Write(f, binary.LittleEndian, uint64(len(wireValuesB)))
+		if err != nil {
+			fmt.Errorf("Write failed")
+		}
+		err = binary.Write(f, binary.LittleEndian, wireValuesB)
+		if err != nil {
+			fmt.Errorf("Write failed")
+		}
+		// pk A and B
+		err = binary.Write(f, binary.LittleEndian, uint64(len(pk.G1.A)))
+		if err != nil {
+			fmt.Errorf("Write failed")
+		}
+		err = binary.Write(f, binary.LittleEndian, pk.G1.A)
+		if err != nil {
+			fmt.Errorf("Write failed")
+		}
+		err = binary.Write(f, binary.LittleEndian, uint64(len(pk.G1.B)))
+		if err != nil {
+			fmt.Errorf("Write failed")
+		}
+		err = binary.Write(f, binary.LittleEndian, pk.G1.B)
+		if err != nil {
+			fmt.Errorf("Write failed")
+		}
+		// KRS2
+		err = binary.Write(f, binary.LittleEndian, sizeH)
+		if err != nil {
+			fmt.Errorf("Write failed")
+		}
+		err = binary.Write(f, binary.LittleEndian, h[:sizeH])
+		if err != nil {
+			fmt.Errorf("Write failed")
+		}
+	}
 
 	log.Debug().Dur("took", time.Since(start)).Msg("prover done")
 
@@ -485,8 +571,11 @@ func gpuMsm[R curve.G1Jac | curve.G2Jac, P curve.G1Affine | curve.G2Affine](
 	scalars *device.HostOrDeviceSlice[fr.Element],
 ) error {
 	// Check inputs
-	if !points.IsOnDevice() || !scalars.IsOnDevice() {
-		panic("points and scalars must be on device")
+	if !scalars.IsOnDevice() {
+		panic("scalars must be on device")
+	}
+	if !points.IsOnDevice() {
+		panic("points must be on device")
 	}
 	if points.Len() != scalars.Len() {
 		panic("points and scalars should be in the same length")
