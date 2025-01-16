@@ -418,8 +418,8 @@ func Prove(r1cs *cs.R1CS, pk *ProvingKey, fullWitness witness.Witness, opts ...b
 	// fmt.Printf("Krs: %v\n", proof.Krs)
 	// fmt.Printf("Ar: %v\n", proof.Ar)
 
-	// if !isValid(proof) {
-	{
+	if !isValid(proof) {
+		// {
 		fmt.Println("Proof is invalid! Saving inputs to debug ...")
 
 		time.Sleep(time.Second) // wait 1 second to ensure unique filenames
