@@ -418,7 +418,8 @@ func Prove(r1cs *cs.R1CS, pk *ProvingKey, fullWitness witness.Witness, opts ...b
 	// fmt.Printf("Krs: %v\n", proof.Krs)
 	// fmt.Printf("Ar: %v\n", proof.Ar)
 
-	if !isValid(proof) {
+	// if !isValid(proof) {
+	{
 		fmt.Println("Proof is invalid! Saving inputs to debug ...")
 
 		time.Sleep(time.Second) // wait 1 second to ensure unique filenames
@@ -427,52 +428,60 @@ func Prove(r1cs *cs.R1CS, pk *ProvingKey, fullWitness witness.Witness, opts ...b
 		filename := fmt.Sprintf("dump_%s.bin", ts)
 		f, err := os.Create(filename)
 		if err != nil {
-			fmt.Errorf("Couldn't open file")
+			panic(err)
 		}
 		defer f.Close()
 		// AR - wires A
 		err = binary.Write(f, binary.LittleEndian, uint64(len(wireValuesA)))
 		if err != nil {
-			fmt.Errorf("Write failed")
+			panic(err)
 		}
 		err = binary.Write(f, binary.LittleEndian, wireValuesA)
 		if err != nil {
-			fmt.Errorf("Write failed")
+			panic(err)
 		}
 		// BS1 - wires B
 		err = binary.Write(f, binary.LittleEndian, uint64(len(wireValuesB)))
 		if err != nil {
-			fmt.Errorf("Write failed")
+			panic(err)
 		}
 		err = binary.Write(f, binary.LittleEndian, wireValuesB)
 		if err != nil {
-			fmt.Errorf("Write failed")
-		}
-		// pk A and B
-		err = binary.Write(f, binary.LittleEndian, uint64(len(pk.G1.A)))
-		if err != nil {
-			fmt.Errorf("Write failed")
-		}
-		err = binary.Write(f, binary.LittleEndian, pk.G1.A)
-		if err != nil {
-			fmt.Errorf("Write failed")
-		}
-		err = binary.Write(f, binary.LittleEndian, uint64(len(pk.G1.B)))
-		if err != nil {
-			fmt.Errorf("Write failed")
-		}
-		err = binary.Write(f, binary.LittleEndian, pk.G1.B)
-		if err != nil {
-			fmt.Errorf("Write failed")
+			panic(err)
 		}
 		// KRS2
-		err = binary.Write(f, binary.LittleEndian, sizeH)
+		err = binary.Write(f, binary.LittleEndian, uint64(sizeH))
 		if err != nil {
-			fmt.Errorf("Write failed")
+			panic(err)
 		}
 		err = binary.Write(f, binary.LittleEndian, h[:sizeH])
 		if err != nil {
-			fmt.Errorf("Write failed")
+			panic(err)
+		}
+		// pk A and B and Z
+		err = binary.Write(f, binary.LittleEndian, uint64(len(pk.G1.A)))
+		if err != nil {
+			panic(err)
+		}
+		err = binary.Write(f, binary.LittleEndian, pk.G1.A)
+		if err != nil {
+			panic(err)
+		}
+		err = binary.Write(f, binary.LittleEndian, uint64(len(pk.G1.B)))
+		if err != nil {
+			panic(err)
+		}
+		err = binary.Write(f, binary.LittleEndian, pk.G1.B)
+		if err != nil {
+			panic(err)
+		}
+		err = binary.Write(f, binary.LittleEndian, uint64(len(pk.G1.Z)))
+		if err != nil {
+			panic(err)
+		}
+		err = binary.Write(f, binary.LittleEndian, pk.G1.Z)
+		if err != nil {
+			panic(err)
 		}
 	}
 

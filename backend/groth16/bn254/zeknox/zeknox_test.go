@@ -19,80 +19,112 @@ func re_run_msm(filename string) {
 	// read data from file
 	f, err := os.Open(filename)
 	if err != nil {
-		fmt.Errorf("Couldn't open file")
+		panic(err)
 	}
 	defer f.Close()
 	// wires A
 	var lenA uint64
 	err = binary.Read(f, binary.LittleEndian, &lenA)
 	if err != nil {
-		fmt.Errorf("Read failed %v\n", err)
+		panic(err)
 	}
 	fmt.Printf("Wire A length: %d\n", lenA)
 	wireValuesA := make([]fr.Element, lenA)
 	err = binary.Read(f, binary.LittleEndian, &wireValuesA)
 	if err != nil {
-		fmt.Errorf("Read failed %v\n", err)
+		panic(err)
 	}
 	// wires B
 	var lenB uint64
 	err = binary.Read(f, binary.LittleEndian, &lenB)
 	if err != nil {
-		fmt.Errorf("Read failed %v\n", err)
+		panic(err)
 	}
 	fmt.Printf("Wire B length: %d\n", lenB)
 	wireValuesB := make([]fr.Element, lenB)
 	err = binary.Read(f, binary.LittleEndian, &wireValuesB)
 	if err != nil {
-		fmt.Errorf("Read failed %v\n", err)
+		panic(err)
 	}
-	// pk A and B
+	// KRS
+	var sizeH uint64
+	err = binary.Read(f, binary.LittleEndian, &sizeH)
+	if err != nil {
+		panic(err)
+	}
+	h := make([]fr.Element, sizeH)
+	err = binary.Read(f, binary.LittleEndian, &h)
+	if err != nil {
+		panic(err)
+	}
+	// pk A and B and Z
 	err = binary.Read(f, binary.LittleEndian, &lenA)
 	if err != nil {
-		fmt.Errorf("Read failed %v\n", err)
+		panic(err)
 	}
 	fmt.Printf("G1 A length: %d\n", lenA)
 	G1A := make([]curve.G1Affine, lenA)
 	err = binary.Read(f, binary.LittleEndian, &G1A)
 	if err != nil {
-		fmt.Errorf("Read failed %v\n", err)
+		panic(err)
 	}
 	err = binary.Read(f, binary.LittleEndian, &lenB)
 	if err != nil {
-		fmt.Errorf("Read failed %v\n", err)
+		panic(err)
 	}
 	fmt.Printf("G1 B length: %d\n", lenB)
 	G1B := make([]curve.G1Affine, lenB)
 	err = binary.Read(f, binary.LittleEndian, &G1B)
 	if err != nil {
-		fmt.Errorf("Read failed %v\n", err)
+		panic(err)
 	}
+	var lenZ uint64
+	err = binary.Read(f, binary.LittleEndian, &lenZ)
+	if err != nil {
+		panic(err)
+	}
+	G1Z := make([]curve.G1Affine, lenZ)
+	err = binary.Read(f, binary.LittleEndian, &G1Z)
+	if err != nil {
+		panic(err)
+	}
+
 	// Compute on CPU
 	n := runtime.NumCPU()
-	var bs1_cpu, ar_cpu curve.G1Jac
+	var bs1_cpu, ar_cpu, krs2_cpu curve.G1Jac
 	_, err = bs1_cpu.MultiExp(G1B, wireValuesB, ecc.MultiExpConfig{NbTasks: n / 2})
 	if err != nil {
-		fmt.Errorf("BS1 CPU MultiExp failed")
+		panic(err)
 	}
 	_, err = ar_cpu.MultiExp(G1A, wireValuesA, ecc.MultiExpConfig{NbTasks: n / 2})
 	if err != nil {
-		fmt.Errorf("AR CPU MultiExp failed")
+		panic(err)
+	}
+	_, err = krs2_cpu.MultiExp(G1Z, h[:sizeH], ecc.MultiExpConfig{NbTasks: n / 2})
+	if err != nil {
+		panic(err)
 	}
 
 	// Compute on GPU
-	var bs1_gpu, ar_gpu curve.G1Jac
+	var bs1_gpu, ar_gpu, krs2_gpu curve.G1Jac
 
-	deviceA := make(chan *device.HostOrDeviceSlice[curve.G1Affine], 1)
-	CopyToDevice(G1A, deviceA)
+	deviceG1A := make(chan *device.HostOrDeviceSlice[curve.G1Affine], 1)
+	CopyToDevice(G1A, deviceG1A)
 	deviceG1B := make(chan *device.HostOrDeviceSlice[curve.G1Affine], 1)
 	CopyToDevice(G1B, deviceG1B)
+	deviceG1Z := make(chan *device.HostOrDeviceSlice[curve.G1Affine], 1)
+	CopyToDevice(G1Z, deviceG1Z)
 
 	G1DeviceA := DevicePoints[curve.G1Affine]{
-		HostOrDeviceSlice: <-deviceA,
+		HostOrDeviceSlice: <-deviceG1A,
 		Mont:              true,
 	}
 	G1DeviceB := DevicePoints[curve.G1Affine]{
 		HostOrDeviceSlice: <-deviceG1B,
+		Mont:              true,
+	}
+	G1DeviceZ := DevicePoints[curve.G1Affine]{
+		HostOrDeviceSlice: <-deviceG1Z,
 		Mont:              true,
 	}
 
@@ -123,14 +155,33 @@ func re_run_msm(filename string) {
 		return nil
 	}
 
+	computeKRS2 := func() error {
+		// Copy h poly to device, since we haven't implemented FFT on device
+		var deviceH *device.HostOrDeviceSlice[fr.Element]
+		chDeviceH := make(chan *device.HostOrDeviceSlice[fr.Element], 1)
+		// sizeH := int(pk.Domain.Cardinality - 1) // comes from the fact the deg(H)=(n-1)+(n-1)-n=n-2
+		if err := CopyToDevice(h[:sizeH], chDeviceH); err != nil {
+			return err
+		}
+		deviceH = <-chDeviceH
+		defer deviceH.Free()
+		// MSM G1 Krs2
+		if err := gpuMsm(&krs2_gpu, &G1DeviceZ, deviceH); err != nil {
+			return err
+		}
+		return nil
+	}
+
 	computeBS1()
 	computeAR1()
+	computeKRS2()
 
 	fmt.Printf("AR are equal? %v\n", ar_cpu.Equal(&ar_gpu))
 	fmt.Printf("BS1 are equal? %v\n", bs1_cpu.Equal(&bs1_gpu))
+	fmt.Printf("KRS2 are equal? %v\n", krs2_cpu.Equal(&krs2_gpu))
 }
 
 func TestMSM(t *testing.T) {
 	// test code
-	re_run_msm("dump_20250116105350.bin")
+	re_run_msm("dump_20250116140029.bin")
 }
