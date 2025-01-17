@@ -52,6 +52,7 @@ func re_run_msm(filename string) {
 	if err != nil {
 		panic(err)
 	}
+	fmt.Printf("Wire H length: %d\n", sizeH)
 	h := make([]fr.Element, sizeH)
 	err = binary.Read(f, binary.LittleEndian, &h)
 	if err != nil {
@@ -83,6 +84,7 @@ func re_run_msm(filename string) {
 	if err != nil {
 		panic(err)
 	}
+	fmt.Printf("G1 Z length: %d\n", lenZ)
 	G1Z := make([]curve.G1Affine, lenZ)
 	err = binary.Read(f, binary.LittleEndian, &G1Z)
 	if err != nil {
@@ -183,5 +185,5 @@ func re_run_msm(filename string) {
 
 func TestMSM(t *testing.T) {
 	// test code
-	re_run_msm("dump_20250116140029.bin")
+	re_run_msm("dump_20250116061447.bin")
 }
