@@ -1,6 +1,7 @@
 package emulated
 
 import (
+	"errors"
 	"fmt"
 	"math/big"
 
@@ -40,29 +41,28 @@ func nbMultiplicationResLimbs(lenLeft, lenRight int) int {
 
 // computeInverseHint packs the inputs for the InverseHint hint function.
 func (f *Field[T]) computeInverseHint(inLimbs []frontend.Variable) (inverseLimbs []frontend.Variable, err error) {
-	var fp T
 	hintInputs := []frontend.Variable{
-		fp.BitsPerLimb(),
-		fp.NbLimbs(),
+		f.fParams.BitsPerLimb(),
+		f.fParams.NbLimbs(),
 	}
 	p := f.Modulus()
 	hintInputs = append(hintInputs, p.Limbs...)
 	hintInputs = append(hintInputs, inLimbs...)
-	return f.api.NewHint(InverseHint, int(fp.NbLimbs()), hintInputs...)
+	return f.api.NewHint(InverseHint, int(f.fParams.NbLimbs()), hintInputs...)
 }
 
 // InverseHint computes the inverse x^-1 for the input x and stores it in outputs.
 func InverseHint(mod *big.Int, inputs []*big.Int, outputs []*big.Int) error {
 	if len(inputs) < 2 {
-		return fmt.Errorf("input must be at least two elements")
+		return errors.New("input must be at least two elements")
 	}
 	nbBits := uint(inputs[0].Uint64())
 	nbLimbs := int(inputs[1].Int64())
 	if len(inputs[2:]) < 2*nbLimbs {
-		return fmt.Errorf("inputs missing")
+		return errors.New("inputs missing")
 	}
 	if len(outputs) != nbLimbs {
-		return fmt.Errorf("result does not fit into output")
+		return errors.New("result does not fit into output")
 	}
 	p := new(big.Int)
 	if err := limbs.Recompose(inputs[2:2+nbLimbs], nbBits, p); err != nil {
@@ -73,7 +73,7 @@ func InverseHint(mod *big.Int, inputs []*big.Int, outputs []*big.Int) error {
 		return fmt.Errorf("recompose value: %w", err)
 	}
 	if x.ModInverse(x, p) == nil {
-		return fmt.Errorf("input and modulus not relatively primes")
+		return errors.New("input and modulus not relatively primes")
 	}
 	if err := limbs.Decompose(x, nbBits, outputs); err != nil {
 		return fmt.Errorf("decompose: %w", err)
@@ -83,10 +83,9 @@ func InverseHint(mod *big.Int, inputs []*big.Int, outputs []*big.Int) error {
 
 // computeDivisionHint packs the inputs for DivisionHint hint function.
 func (f *Field[T]) computeDivisionHint(nomLimbs, denomLimbs []frontend.Variable) (divLimbs []frontend.Variable, err error) {
-	var fp T
 	hintInputs := []frontend.Variable{
-		fp.BitsPerLimb(),
-		fp.NbLimbs(),
+		f.fParams.BitsPerLimb(),
+		f.fParams.NbLimbs(),
 		len(denomLimbs),
 		len(nomLimbs),
 	}
@@ -94,14 +93,14 @@ func (f *Field[T]) computeDivisionHint(nomLimbs, denomLimbs []frontend.Variable)
 	hintInputs = append(hintInputs, p.Limbs...)
 	hintInputs = append(hintInputs, nomLimbs...)
 	hintInputs = append(hintInputs, denomLimbs...)
-	return f.api.NewHint(DivHint, int(fp.NbLimbs()), hintInputs...)
+	return f.api.NewHint(DivHint, int(f.fParams.NbLimbs()), hintInputs...)
 }
 
 // DivHint computes the value z = x/y for inputs x and y and stores z in
 // outputs.
 func DivHint(mod *big.Int, inputs []*big.Int, outputs []*big.Int) error {
 	if len(inputs) < 3 {
-		return fmt.Errorf("input must be at least three elements")
+		return errors.New("input must be at least three elements")
 	}
 	nbBits := uint(inputs[0].Uint64())
 	nbLimbs := int(inputs[1].Int64())
@@ -110,10 +109,10 @@ func DivHint(mod *big.Int, inputs []*big.Int, outputs []*big.Int) error {
 	// Denominator and order have to be nbLimbs long.
 	nbNomLimbs := int(inputs[3].Int64())
 	if len(inputs[4:]) != nbLimbs+nbNomLimbs+nbDenomLimbs {
-		return fmt.Errorf("input length mismatch")
+		return errors.New("input length mismatch")
 	}
 	if len(outputs) != nbLimbs {
-		return fmt.Errorf("result does not fit into output")
+		return errors.New("result does not fit into output")
 	}
 	p := new(big.Int)
 	if err := limbs.Recompose(inputs[4:4+nbLimbs], nbBits, p); err != nil {
@@ -129,7 +128,7 @@ func DivHint(mod *big.Int, inputs []*big.Int, outputs []*big.Int) error {
 	}
 	res := new(big.Int).ModInverse(denominator, p)
 	if res == nil {
-		return fmt.Errorf("no modular inverse")
+		return errors.New("no modular inverse")
 	}
 	res.Mul(res, nominator)
 	res.Mod(res, p)
@@ -143,14 +142,14 @@ func DivHint(mod *big.Int, inputs []*big.Int, outputs []*big.Int) error {
 func SqrtHint(mod *big.Int, inputs []*big.Int, outputs []*big.Int) error {
 	return UnwrapHint(inputs, outputs, func(field *big.Int, inputs, outputs []*big.Int) error {
 		if len(inputs) != 1 {
-			return fmt.Errorf("expecting single input")
+			return errors.New("expecting single input")
 		}
 		if len(outputs) != 1 {
-			return fmt.Errorf("expecting single output")
+			return errors.New("expecting single output")
 		}
 		res := new(big.Int)
 		if res.ModSqrt(inputs[0], field) == nil {
-			return fmt.Errorf("no square root")
+			return errors.New("no square root")
 		}
 		outputs[0].Set(res)
 		return nil

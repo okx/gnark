@@ -48,7 +48,7 @@ func NewExt2(api frontend.API) *Ext2 {
 	nonResidues := make(map[int]map[int]*E2)
 	for pwr, v := range pwrs {
 		for coeff, v := range v {
-			el := E2{emulated.ValueOf[emulated.BLS12381Fp](v.A0), emulated.ValueOf[emulated.BLS12381Fp](v.A1)}
+			el := E2{*fp.NewElement(v.A0), *fp.NewElement(v.A1)}
 			if nonResidues[pwr] == nil {
 				nonResidues[pwr] = make(map[int]*E2)
 			}
@@ -109,10 +109,10 @@ func (e Ext2) MulByNonResidue1Power1(x *E2) *E2 {
 
 // MulByNonResidue1Power2 returns x*(1+u)^(2*(p^1-1)/6)
 func (e Ext2) MulByNonResidue1Power2(x *E2) *E2 {
-	element := emulated.ValueOf[emulated.BLS12381Fp]("4002409555221667392624310435006688643935503118305586438271171395842971157480381377015405980053539358417135540939436")
-	a := e.fp.Mul(&x.A1, &element)
+	element := e.fp.NewElement("4002409555221667392624310435006688643935503118305586438271171395842971157480381377015405980053539358417135540939436")
+	a := e.fp.Mul(&x.A1, element)
 	a = e.fp.Neg(a)
-	b := e.fp.Mul(&x.A0, &element)
+	b := e.fp.Mul(&x.A0, element)
 	return &E2{
 		A0: *a,
 		A1: *b,
@@ -126,10 +126,10 @@ func (e Ext2) MulByNonResidue1Power3(x *E2) *E2 {
 
 // MulByNonResidue1Power4 returns x*(1+u)^(4*(p^1-1)/6)
 func (e Ext2) MulByNonResidue1Power4(x *E2) *E2 {
-	element := emulated.ValueOf[emulated.BLS12381Fp]("4002409555221667392624310435006688643935503118305586438271171395842971157480381377015405980053539358417135540939437")
+	element := e.fp.NewElement("4002409555221667392624310435006688643935503118305586438271171395842971157480381377015405980053539358417135540939437")
 	return &E2{
-		A0: *e.fp.Mul(&x.A0, &element),
-		A1: *e.fp.Mul(&x.A1, &element),
+		A0: *e.fp.Mul(&x.A0, element),
+		A1: *e.fp.Mul(&x.A1, element),
 	}
 }
 
@@ -140,60 +140,54 @@ func (e Ext2) MulByNonResidue1Power5(x *E2) *E2 {
 
 // MulByNonResidue2Power1 returns x*(1+u)^(1*(p^2-1)/6)
 func (e Ext2) MulByNonResidue2Power1(x *E2) *E2 {
-	element := emulated.ValueOf[emulated.BLS12381Fp]("793479390729215512621379701633421447060886740281060493010456487427281649075476305620758731620351")
+	element := e.fp.NewElement("793479390729215512621379701633421447060886740281060493010456487427281649075476305620758731620351")
 	return &E2{
-		A0: *e.fp.Mul(&x.A0, &element),
-		A1: *e.fp.Mul(&x.A1, &element),
+		A0: *e.fp.Mul(&x.A0, element),
+		A1: *e.fp.Mul(&x.A1, element),
 	}
 }
 
 // MulByNonResidue2Power2 returns x*(1+u)^(2*(p^2-1)/6)
 func (e Ext2) MulByNonResidue2Power2(x *E2) *E2 {
-	element := emulated.ValueOf[emulated.BLS12381Fp]("793479390729215512621379701633421447060886740281060493010456487427281649075476305620758731620350")
+	element := e.fp.NewElement("793479390729215512621379701633421447060886740281060493010456487427281649075476305620758731620350")
 	return &E2{
-		A0: *e.fp.Mul(&x.A0, &element),
-		A1: *e.fp.Mul(&x.A1, &element),
+		A0: *e.fp.Mul(&x.A0, element),
+		A1: *e.fp.Mul(&x.A1, element),
 	}
 }
 
 // MulByNonResidue2Power3 returns x*(1+u)^(3*(p^2-1)/6)
 func (e Ext2) MulByNonResidue2Power3(x *E2) *E2 {
-	element := emulated.ValueOf[emulated.BLS12381Fp]("4002409555221667393417789825735904156556882819939007885332058136124031650490837864442687629129015664037894272559786")
+	element := e.fp.NewElement("4002409555221667393417789825735904156556882819939007885332058136124031650490837864442687629129015664037894272559786")
 	return &E2{
-		A0: *e.fp.Mul(&x.A0, &element),
-		A1: *e.fp.Mul(&x.A1, &element),
+		A0: *e.fp.Mul(&x.A0, element),
+		A1: *e.fp.Mul(&x.A1, element),
 	}
 }
 
 // MulByNonResidue2Power4 returns x*(1+u)^(4*(p^2-1)/6)
 func (e Ext2) MulByNonResidue2Power4(x *E2) *E2 {
-	element := emulated.ValueOf[emulated.BLS12381Fp]("4002409555221667392624310435006688643935503118305586438271171395842971157480381377015405980053539358417135540939436")
+	element := e.fp.NewElement("4002409555221667392624310435006688643935503118305586438271171395842971157480381377015405980053539358417135540939436")
 	return &E2{
-		A0: *e.fp.Mul(&x.A0, &element),
-		A1: *e.fp.Mul(&x.A1, &element),
+		A0: *e.fp.Mul(&x.A0, element),
+		A1: *e.fp.Mul(&x.A1, element),
 	}
 }
 
 // MulByNonResidue2Power5 returns x*(1+u)^(5*(p^2-1)/6)
 func (e Ext2) MulByNonResidue2Power5(x *E2) *E2 {
-	element := emulated.ValueOf[emulated.BLS12381Fp]("4002409555221667392624310435006688643935503118305586438271171395842971157480381377015405980053539358417135540939437")
+	element := e.fp.NewElement("4002409555221667392624310435006688643935503118305586438271171395842971157480381377015405980053539358417135540939437")
 	return &E2{
-		A0: *e.fp.Mul(&x.A0, &element),
-		A1: *e.fp.Mul(&x.A1, &element),
+		A0: *e.fp.Mul(&x.A0, element),
+		A1: *e.fp.Mul(&x.A1, element),
 	}
 }
 
 func (e Ext2) Mul(x, y *E2) *E2 {
-
-	v0 := e.fp.Mul(&x.A0, &y.A0)
-	v1 := e.fp.Mul(&x.A1, &y.A1)
-
-	b0 := e.fp.Sub(v0, v1)
-	b1 := e.fp.Add(&x.A0, &x.A1)
-	tmp := e.fp.Add(&y.A0, &y.A1)
-	b1 = e.fp.Mul(b1, tmp)
-	tmp = e.fp.Add(v0, v1)
-	b1 = e.fp.Sub(b1, tmp)
+	// b0 = x0*y0 - x1*y1
+	b0 := e.fp.Eval([][]*baseEl{{&x.A0, &y.A0}, {e.fp.NewElement(-1), &x.A1, &y.A1}}, []int{1, 1})
+	// b1 = x0*y1 + x1*y0
+	b1 := e.fp.Eval([][]*baseEl{{&x.A0, &y.A1}, {&x.A1, &y.A0}}, []int{1, 1})
 
 	return &E2{
 		A0: *b0,
@@ -262,17 +256,27 @@ func (e Ext2) NonResidue() *E2 {
 }
 
 func (e Ext2) Square(x *E2) *E2 {
-	a := e.fp.Add(&x.A0, &x.A1)
-	b := e.fp.Sub(&x.A0, &x.A1)
-	a = e.fp.Mul(a, b)
-	b = e.fp.Mul(&x.A0, &x.A1)
-	b = e.fp.MulConst(b, big.NewInt(2))
+	// a = (x0+x1)(x0-x1) = x0^2 - x1^2
+	a := e.fp.Eval([][]*baseEl{{&x.A0, &x.A0}, {e.fp.NewElement(-1), &x.A1, &x.A1}}, []int{1, 1})
+	// b = 2*x0*x1
+	b := e.fp.Eval([][]*baseEl{{&x.A0, &x.A1}}, []int{2})
 	return &E2{
 		A0: *a,
 		A1: *b,
 	}
 }
 
+func (e Ext2) Cube(x *E2) *E2 {
+	mone := e.fp.NewElement(-1)
+	// a = x0^3 - 3*x0*x1^2
+	a := e.fp.Eval([][]*baseEl{{&x.A0, &x.A0, &x.A0}, {mone, &x.A0, &x.A1, &x.A1}}, []int{1, 3})
+	// b = 3*x1*x0^2 - x1^3
+	b := e.fp.Eval([][]*baseEl{{&x.A1, &x.A0, &x.A0}, {mone, &x.A1, &x.A1, &x.A1}}, []int{3, 1})
+	return &E2{
+		A0: *a,
+		A1: *b,
+	}
+}
 func (e Ext2) Double(x *E2) *E2 {
 	two := big.NewInt(2)
 	z0 := e.fp.MulConst(&x.A0, two)
@@ -286,6 +290,14 @@ func (e Ext2) Double(x *E2) *E2 {
 func (e Ext2) AssertIsEqual(x, y *E2) {
 	e.fp.AssertIsEqual(&x.A0, &y.A0)
 	e.fp.AssertIsEqual(&x.A1, &y.A1)
+}
+
+func (e Ext2) IsEqual(x, y *E2) frontend.Variable {
+	xDiff := e.fp.Sub(&x.A0, &y.A0)
+	yDiff := e.fp.Sub(&x.A1, &y.A1)
+	xIsZero := e.fp.IsZero(xDiff)
+	yIsZero := e.fp.IsZero(yDiff)
+	return e.api.And(xIsZero, yIsZero)
 }
 
 func FromE2(y *bls12381.E2) E2 {

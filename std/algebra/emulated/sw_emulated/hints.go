@@ -2,6 +2,7 @@ package sw_emulated
 
 import (
 	"crypto/elliptic"
+	"errors"
 	"fmt"
 	"math/big"
 
@@ -20,7 +21,6 @@ import (
 	"github.com/consensys/gnark/constraint/solver"
 	limbs "github.com/consensys/gnark/std/internal/limbcomposition"
 	"github.com/consensys/gnark/std/math/emulated"
-	"github.com/consensys/gnark/std/math/emulated/emparams"
 )
 
 func init() {
@@ -42,10 +42,10 @@ func GetHints() []solver.Hint {
 func decomposeScalarG1Subscalars(mod *big.Int, inputs []*big.Int, outputs []*big.Int) error {
 	return emulated.UnwrapHint(inputs, outputs, func(field *big.Int, inputs, outputs []*big.Int) error {
 		if len(inputs) != 2 {
-			return fmt.Errorf("expecting two inputs")
+			return errors.New("expecting two inputs")
 		}
 		if len(outputs) != 2 {
-			return fmt.Errorf("expecting two outputs")
+			return errors.New("expecting two outputs")
 		}
 		glvBasis := new(ecc.Lattice)
 		ecc.PrecomputeLattice(field, inputs[1], glvBasis)
@@ -71,10 +71,10 @@ func decomposeScalarG1Subscalars(mod *big.Int, inputs []*big.Int, outputs []*big
 func decomposeScalarG1Signs(mod *big.Int, inputs []*big.Int, outputs []*big.Int) error {
 	return emulated.UnwrapHintWithNativeOutput(inputs, outputs, func(field *big.Int, inputs, outputs []*big.Int) error {
 		if len(inputs) != 2 {
-			return fmt.Errorf("expecting two inputs")
+			return errors.New("expecting two inputs")
 		}
 		if len(outputs) != 2 {
-			return fmt.Errorf("expecting two outputs")
+			return errors.New("expecting two outputs")
 		}
 		glvBasis := new(ecc.Lattice)
 		ecc.PrecomputeLattice(field, inputs[1], glvBasis)
@@ -94,81 +94,54 @@ func decomposeScalarG1Signs(mod *big.Int, inputs []*big.Int, outputs []*big.Int)
 
 // TODO @yelhousni: generalize for any supported curve as it currently supports only:
 // BN254, BLS12-381, BW6-761 and Secp256k1, P256, P384 and STARK curve.
-func scalarMulHint(_ *big.Int, inputs []*big.Int, outputs []*big.Int) error {
-	return emulated.UnwrapHintWithNativeInput(inputs, outputs, func(field *big.Int, inputs, outputs []*big.Int) error {
+func scalarMulHint(field *big.Int, inputs []*big.Int, outputs []*big.Int) error {
+	return emulated.UnwrapHintWithNativeInput(inputs, outputs, func(nonNativeField *big.Int, inputs, outputs []*big.Int) error {
 		if len(outputs) != 2 {
-			return fmt.Errorf("expecting two outputs")
+			return errors.New("expecting two outputs")
 		}
-		if len(outputs) != 2 {
-			return fmt.Errorf("expecting two outputs")
+		if len(inputs) < 4 {
+			return errors.New("expecting at least four inputs")
 		}
-		if field.Cmp(elliptic.P256().Params().P) == 0 {
-			var fp emparams.P256Fp
-			var fr emparams.P256Fr
-			PXLimbs := inputs[:fp.NbLimbs()]
-			PYLimbs := inputs[fp.NbLimbs() : 2*fp.NbLimbs()]
-			SLimbs := inputs[2*fp.NbLimbs():]
-			Px, Py, S := new(big.Int), new(big.Int), new(big.Int)
-			if err := limbs.Recompose(PXLimbs, fp.BitsPerLimb(), Px); err != nil {
-				return err
-
-			}
-			if err := limbs.Recompose(PYLimbs, fp.BitsPerLimb(), Py); err != nil {
-				return err
-
-			}
-			if err := limbs.Recompose(SLimbs, fr.BitsPerLimb(), S); err != nil {
-				return err
-
-			}
+		effNbBitsBase := inputs[0].Uint64()
+		effNbBitsScalar := inputs[1].Uint64()
+		nbPXLimbs := inputs[2].Uint64()
+		if len(inputs[3:]) < int(nbPXLimbs) {
+			return fmt.Errorf("expecting %d limbs for the point", nbPXLimbs)
+		}
+		PXLimbs := inputs[3 : 3+int(nbPXLimbs)]
+		nbPYLimbs := inputs[3+int(nbPXLimbs)].Uint64()
+		if len(inputs[4+int(nbPXLimbs):]) < int(nbPYLimbs) {
+			return fmt.Errorf("expecting %d limbs for the point", nbPYLimbs)
+		}
+		PYLimbs := inputs[4+int(nbPXLimbs) : 4+int(nbPXLimbs)+int(nbPYLimbs)]
+		nbSLimbs := inputs[4+int(nbPXLimbs)+int(nbPYLimbs)].Uint64()
+		if len(inputs[5+int(nbPXLimbs)+int(nbPYLimbs):]) != int(nbSLimbs) {
+			return fmt.Errorf("expecting %d limbs for the scalar", nbSLimbs)
+		}
+		SLimbs := inputs[5+int(nbPXLimbs)+int(nbPYLimbs):]
+		Px, Py, S := new(big.Int), new(big.Int), new(big.Int)
+		if err := limbs.Recompose(PXLimbs, uint(effNbBitsBase), Px); err != nil {
+			return fmt.Errorf("failed to recompose Px: %w", err)
+		}
+		if err := limbs.Recompose(PYLimbs, uint(effNbBitsBase), Py); err != nil {
+			return fmt.Errorf("failed to recompose Py: %w", err)
+		}
+		if err := limbs.Recompose(SLimbs, uint(effNbBitsScalar), S); err != nil {
+			return fmt.Errorf("failed to recompose S: %w", err)
+		}
+		if nonNativeField.Cmp(elliptic.P256().Params().P) == 0 {
 			curve := elliptic.P256()
 			// compute the resulting point [s]P
 			Qx, Qy := curve.ScalarMult(Px, Py, S.Bytes())
 			outputs[0].Set(Qx)
 			outputs[1].Set(Qy)
-		} else if field.Cmp(elliptic.P384().Params().P) == 0 {
-			var fp emparams.P384Fp
-			var fr emparams.P384Fr
-			PXLimbs := inputs[:fp.NbLimbs()]
-			PYLimbs := inputs[fp.NbLimbs() : 2*fp.NbLimbs()]
-			SLimbs := inputs[2*fp.NbLimbs():]
-			Px, Py, S := new(big.Int), new(big.Int), new(big.Int)
-			if err := limbs.Recompose(PXLimbs, fp.BitsPerLimb(), Px); err != nil {
-				return err
-
-			}
-			if err := limbs.Recompose(PYLimbs, fp.BitsPerLimb(), Py); err != nil {
-				return err
-
-			}
-			if err := limbs.Recompose(SLimbs, fr.BitsPerLimb(), S); err != nil {
-				return err
-
-			}
+		} else if nonNativeField.Cmp(elliptic.P384().Params().P) == 0 {
 			curve := elliptic.P384()
 			// compute the resulting point [s]P
 			Qx, Qy := curve.ScalarMult(Px, Py, S.Bytes())
 			outputs[0].Set(Qx)
 			outputs[1].Set(Qy)
-		} else if field.Cmp(stark_fp.Modulus()) == 0 {
-			var fp emparams.STARKCurveFp
-			var fr emparams.STARKCurveFr
-			PXLimbs := inputs[:fp.NbLimbs()]
-			PYLimbs := inputs[fp.NbLimbs() : 2*fp.NbLimbs()]
-			SLimbs := inputs[2*fp.NbLimbs():]
-			Px, Py, S := new(big.Int), new(big.Int), new(big.Int)
-			if err := limbs.Recompose(PXLimbs, fp.BitsPerLimb(), Px); err != nil {
-				return err
-
-			}
-			if err := limbs.Recompose(PYLimbs, fp.BitsPerLimb(), Py); err != nil {
-				return err
-
-			}
-			if err := limbs.Recompose(SLimbs, fr.BitsPerLimb(), S); err != nil {
-				return err
-
-			}
+		} else if nonNativeField.Cmp(stark_fp.Modulus()) == 0 {
 			// compute the resulting point [s]Q
 			var P stark_curve.G1Affine
 			P.X.SetBigInt(Px)
@@ -176,25 +149,7 @@ func scalarMulHint(_ *big.Int, inputs []*big.Int, outputs []*big.Int) error {
 			P.ScalarMultiplication(&P, S)
 			P.X.BigInt(outputs[0])
 			P.Y.BigInt(outputs[1])
-		} else if field.Cmp(bn_fp.Modulus()) == 0 {
-			var fp emparams.BN254Fp
-			var fr emparams.BN254Fr
-			PXLimbs := inputs[:fp.NbLimbs()]
-			PYLimbs := inputs[fp.NbLimbs() : 2*fp.NbLimbs()]
-			SLimbs := inputs[2*fp.NbLimbs():]
-			Px, Py, S := new(big.Int), new(big.Int), new(big.Int)
-			if err := limbs.Recompose(PXLimbs, fp.BitsPerLimb(), Px); err != nil {
-				return err
-
-			}
-			if err := limbs.Recompose(PYLimbs, fp.BitsPerLimb(), Py); err != nil {
-				return err
-
-			}
-			if err := limbs.Recompose(SLimbs, fr.BitsPerLimb(), S); err != nil {
-				return err
-
-			}
+		} else if nonNativeField.Cmp(bn_fp.Modulus()) == 0 {
 			// compute the resulting point [s]Q
 			var P bn254.G1Affine
 			P.X.SetBigInt(Px)
@@ -202,25 +157,7 @@ func scalarMulHint(_ *big.Int, inputs []*big.Int, outputs []*big.Int) error {
 			P.ScalarMultiplication(&P, S)
 			P.X.BigInt(outputs[0])
 			P.Y.BigInt(outputs[1])
-		} else if field.Cmp(bls12381_fp.Modulus()) == 0 {
-			var fp emparams.BLS12381Fp
-			var fr emparams.BLS12381Fr
-			PXLimbs := inputs[:fp.NbLimbs()]
-			PYLimbs := inputs[fp.NbLimbs() : 2*fp.NbLimbs()]
-			SLimbs := inputs[2*fp.NbLimbs():]
-			Px, Py, S := new(big.Int), new(big.Int), new(big.Int)
-			if err := limbs.Recompose(PXLimbs, fp.BitsPerLimb(), Px); err != nil {
-				return err
-
-			}
-			if err := limbs.Recompose(PYLimbs, fp.BitsPerLimb(), Py); err != nil {
-				return err
-
-			}
-			if err := limbs.Recompose(SLimbs, fr.BitsPerLimb(), S); err != nil {
-				return err
-
-			}
+		} else if nonNativeField.Cmp(bls12381_fp.Modulus()) == 0 {
 			// compute the resulting point [s]Q
 			var P bls12381.G1Affine
 			P.X.SetBigInt(Px)
@@ -228,25 +165,7 @@ func scalarMulHint(_ *big.Int, inputs []*big.Int, outputs []*big.Int) error {
 			P.ScalarMultiplication(&P, S)
 			P.X.BigInt(outputs[0])
 			P.Y.BigInt(outputs[1])
-		} else if field.Cmp(secp_fp.Modulus()) == 0 {
-			var fp emparams.Secp256k1Fp
-			var fr emparams.Secp256k1Fr
-			PXLimbs := inputs[:fp.NbLimbs()]
-			PYLimbs := inputs[fp.NbLimbs() : 2*fp.NbLimbs()]
-			SLimbs := inputs[2*fp.NbLimbs():]
-			Px, Py, S := new(big.Int), new(big.Int), new(big.Int)
-			if err := limbs.Recompose(PXLimbs, fp.BitsPerLimb(), Px); err != nil {
-				return err
-
-			}
-			if err := limbs.Recompose(PYLimbs, fp.BitsPerLimb(), Py); err != nil {
-				return err
-
-			}
-			if err := limbs.Recompose(SLimbs, fr.BitsPerLimb(), S); err != nil {
-				return err
-
-			}
+		} else if nonNativeField.Cmp(secp_fp.Modulus()) == 0 {
 			// compute the resulting point [s]Q
 			var P secp256k1.G1Affine
 			P.X.SetBigInt(Px)
@@ -254,25 +173,7 @@ func scalarMulHint(_ *big.Int, inputs []*big.Int, outputs []*big.Int) error {
 			P.ScalarMultiplication(&P, S)
 			P.X.BigInt(outputs[0])
 			P.Y.BigInt(outputs[1])
-		} else if field.Cmp(bw6_fp.Modulus()) == 0 {
-			var fp emparams.BW6761Fp
-			var fr emparams.BW6761Fr
-			PXLimbs := inputs[:fp.NbLimbs()]
-			PYLimbs := inputs[fp.NbLimbs() : 2*fp.NbLimbs()]
-			SLimbs := inputs[2*fp.NbLimbs():]
-			Px, Py, S := new(big.Int), new(big.Int), new(big.Int)
-			if err := limbs.Recompose(PXLimbs, fp.BitsPerLimb(), Px); err != nil {
-				return err
-
-			}
-			if err := limbs.Recompose(PYLimbs, fp.BitsPerLimb(), Py); err != nil {
-				return err
-
-			}
-			if err := limbs.Recompose(SLimbs, fr.BitsPerLimb(), S); err != nil {
-				return err
-
-			}
+		} else if nonNativeField.Cmp(bw6_fp.Modulus()) == 0 {
 			// compute the resulting point [s]Q
 			var P bw6761.G1Affine
 			P.X.SetBigInt(Px)
@@ -280,9 +181,8 @@ func scalarMulHint(_ *big.Int, inputs []*big.Int, outputs []*big.Int) error {
 			P.ScalarMultiplication(&P, S)
 			P.X.BigInt(outputs[0])
 			P.Y.BigInt(outputs[1])
-
 		} else {
-			return fmt.Errorf("unsupported curve")
+			return errors.New("unsupported curve")
 		}
 
 		return nil
@@ -339,8 +239,8 @@ func halfGCDEisensteinSigns(mod *big.Int, inputs, outputs []*big.Int) error {
 		if len(inputs) != 2 {
 			return fmt.Errorf("expecting two input")
 		}
-		if len(outputs) != 5 {
-			return fmt.Errorf("expecting five outputs")
+		if len(outputs) != 4 {
+			return fmt.Errorf("expecting four outputs")
 		}
 		glvBasis := new(ecc.Lattice)
 		ecc.PrecomputeLattice(field, inputs[1], glvBasis)
@@ -361,15 +261,7 @@ func halfGCDEisensteinSigns(mod *big.Int, inputs, outputs []*big.Int) error {
 		outputs[1].SetUint64(0)
 		outputs[2].SetUint64(0)
 		outputs[3].SetUint64(0)
-		outputs[4].SetUint64(0)
 		res := eisenstein.HalfGCD(&r, &s)
-		s.A1.Mul(res[1].A1, inputs[1]).
-			Add(s.A1, res[1].A0).
-			Mul(s.A1, inputs[0]).
-			Add(s.A1, res[0].A0)
-		s.A0.Mul(res[0].A1, inputs[1])
-		s.A1.Add(s.A1, s.A0).
-			Div(s.A1, field)
 
 		if res[0].A0.Sign() == -1 {
 			outputs[0].SetUint64(1)
@@ -383,9 +275,6 @@ func halfGCDEisensteinSigns(mod *big.Int, inputs, outputs []*big.Int) error {
 		if res[1].A1.Sign() == -1 {
 			outputs[3].SetUint64(1)
 		}
-		if s.A1.Sign() == -1 {
-			outputs[4].SetUint64(1)
-		}
 		return nil
 	})
 }
@@ -395,8 +284,8 @@ func halfGCDEisenstein(mod *big.Int, inputs []*big.Int, outputs []*big.Int) erro
 		if len(inputs) != 2 {
 			return fmt.Errorf("expecting two input")
 		}
-		if len(outputs) != 5 {
-			return fmt.Errorf("expecting five outputs")
+		if len(outputs) != 4 {
+			return fmt.Errorf("expecting four outputs")
 		}
 		glvBasis := new(ecc.Lattice)
 		ecc.PrecomputeLattice(field, inputs[1], glvBasis)
@@ -417,13 +306,6 @@ func halfGCDEisenstein(mod *big.Int, inputs []*big.Int, outputs []*big.Int) erro
 		outputs[1].Set(res[0].A1)
 		outputs[2].Set(res[1].A0)
 		outputs[3].Set(res[1].A1)
-		outputs[4].Mul(res[1].A1, inputs[1]).
-			Add(outputs[4], res[1].A0).
-			Mul(outputs[4], inputs[0]).
-			Add(outputs[4], res[0].A0)
-		s.A0.Mul(res[0].A1, inputs[1])
-		outputs[4].Add(outputs[4], s.A0).
-			Div(outputs[4], field)
 
 		if outputs[0].Sign() == -1 {
 			outputs[0].Neg(outputs[0])
@@ -436,9 +318,6 @@ func halfGCDEisenstein(mod *big.Int, inputs []*big.Int, outputs []*big.Int) erro
 		}
 		if outputs[3].Sign() == -1 {
 			outputs[3].Neg(outputs[3])
-		}
-		if outputs[4].Sign() == -1 {
-			outputs[4].Neg(outputs[4])
 		}
 		return nil
 	})

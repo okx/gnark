@@ -1,13 +1,14 @@
 package gkr
 
 import (
+	"errors"
 	"fmt"
 	"math/bits"
 
 	"github.com/consensys/gnark/constraint"
 	"github.com/consensys/gnark/constraint/solver"
 	"github.com/consensys/gnark/frontend"
-	"github.com/consensys/gnark/internal/algo_utils"
+	"github.com/consensys/gnark/internal/utils"
 	fiatshamir "github.com/consensys/gnark/std/fiat-shamir"
 	"github.com/consensys/gnark/std/hash"
 )
@@ -71,11 +72,11 @@ func (api *API) Import(assignment []frontend.Variable) (constraint.GkrVariable, 
 	nbInstances := len(assignment)
 	logNbInstances := log2(uint(nbInstances))
 	if logNbInstances == -1 {
-		return -1, fmt.Errorf("number of assignments must be a power of 2")
+		return -1, errors.New("number of assignments must be a power of 2")
 	}
 
 	if currentNbInstances := api.nbInstances(); currentNbInstances != -1 && currentNbInstances != nbInstances {
-		return -1, fmt.Errorf("number of assignments must be consistent across all variables")
+		return -1, errors.New("number of assignments must be consistent across all variables")
 	}
 	newVar := api.toStore.NewInputVariable()
 	api.assignments = append(api.assignments, assignment)
@@ -108,9 +109,14 @@ func (api *API) Solve(parentApi frontend.API) (Solution, error) {
 
 	for i := range circuit {
 		v := &circuit[i]
-		if v.IsInput() {
+		in, out := v.IsInput(), v.IsOutput()
+		if in && out {
+			return Solution{}, fmt.Errorf("unused input (variable #%d)", i)
+		}
+
+		if in {
 			solveHintNIn += nbInstances - len(v.Dependencies)
-		} else if v.IsOutput() {
+		} else if out {
 			solveHintNOut += nbInstances
 		}
 	}
@@ -152,8 +158,8 @@ func (api *API) Solve(parentApi frontend.API) (Solution, error) {
 }
 
 // Export returns the values of an output variable across all instances
-func (s Solution) Export(v frontend.Variable) []frontend.Variable {
-	return algo_utils.Map(s.permutations.SortedInstances, algo_utils.SliceAt(s.assignments[v.(constraint.GkrVariable)]))
+func (s Solution) Export(v constraint.GkrVariable) []frontend.Variable {
+	return utils.Map(s.permutations.SortedInstances, utils.SliceAt(s.assignments[v]))
 }
 
 // Verify encodes the verification circuitry for the GKR circuit
@@ -183,7 +189,7 @@ func (s Solution) Verify(hashName string, initialChallenges ...frontend.Variable
 	}
 	s.toStore.ProveHintID = solver.GetHintID(proveHintPlaceholder)
 
-	forSnarkSorted := algo_utils.MapRange(0, len(s.toStore.Circuit), slicePtrAt(forSnark.circuit))
+	forSnarkSorted := utils.MapRange(0, len(s.toStore.Circuit), slicePtrAt(forSnark.circuit))
 
 	if proof, err = DeserializeProof(forSnarkSorted, proofSerialized); err != nil {
 		return err
@@ -223,8 +229,8 @@ func newCircuitDataForSnark(info constraint.GkrInfo, assignment assignment) circ
 	for i := range circuit {
 		w := info.Circuit[i]
 		circuit[i] = Wire{
-			Gate:            ite(w.IsInput(), Gates[w.Gate], Gate(IdentityGate{})),
-			Inputs:          algo_utils.Map(w.Inputs, circuitAt),
+			Gate:            GetGate(ite(w.IsInput(), GateName(w.Gate), Identity)),
+			Inputs:          utils.Map(w.Inputs, circuitAt),
 			nbUniqueOutputs: w.NbUniqueOutputs,
 		}
 		snarkAssignment[&circuit[i]] = assignment[i]
@@ -247,10 +253,10 @@ func (a assignment) NbInstances() int {
 }
 
 func (a assignment) Permute(p constraint.GkrPermutations) {
-	algo_utils.Permute(a, p.WiresPermutation)
+	utils.Permute(a, p.WiresPermutation)
 	for i := range a {
 		if a[i] != nil {
-			algo_utils.Permute(a[i], p.InstancesPermutation)
+			utils.Permute(a[i], p.InstancesPermutation)
 		}
 	}
 }

@@ -1,18 +1,5 @@
-/*
-Copyright © 2021 ConsenSys Software Inc.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2020-2025 Consensys Software Inc.
+// Licensed under the Apache License, Version 2.0. See the LICENSE file for details.
 
 package test
 
@@ -37,10 +24,10 @@ import (
 
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark-crypto/field/pool"
-	"github.com/consensys/gnark/backend"
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/internal/circuitdefer"
 	"github.com/consensys/gnark/internal/kvstore"
+	"github.com/consensys/gnark/internal/smallfields"
 	"github.com/consensys/gnark/internal/utils"
 )
 
@@ -53,12 +40,12 @@ import (
 type engine struct {
 	curveID ecc.ID
 	q       *big.Int
-	opt     backend.ProverConfig
 	// mHintsFunctions map[hint.ID]hintFunction
 	constVars bool
 	kvstore.Store
-	blueprints        []constraint.Blueprint
-	internalVariables []*big.Int
+	blueprints                []constraint.Blueprint
+	internalVariables         []*big.Int
+	noSmallFieldCompatibility bool
 }
 
 // TestEngineOption defines an option for the test engine.
@@ -75,15 +62,16 @@ func SetAllVariablesAsConstants() TestEngineOption {
 	}
 }
 
-// WithBackendProverOptions is a test engine option which allows to define
-// prover options. If not set, then default prover configuration is used.
-func WithBackendProverOptions(opts ...backend.ProverOption) TestEngineOption {
+// WithNoSmallFieldCompatibility prevents trying to make the test engine
+// compatible with the different backends in case the circuit is compiled over
+// a small field. Particularly, in the compatibility mode, the test engine
+// would implement [frontend.WideCommitter] and [frontend.Rangechecker] interfaces.
+// When this option is set, the test engine will not implement these interfaces.
+//
+// It is useful for checking edge cases.
+func WithNoSmallFieldCompatibility() TestEngineOption {
 	return func(e *engine) error {
-		cfg, err := backend.NewProverConfig(opts...)
-		if err != nil {
-			return fmt.Errorf("new prover config: %w", err)
-		}
-		e.opt = cfg
+		e.noSmallFieldCompatibility = true
 		return nil
 	}
 }
@@ -117,7 +105,7 @@ func IsSolved(circuit, witness frontend.Circuit, field *big.Int, opts ...TestEng
 	c := shallowClone(circuit)
 
 	// set the witness values
-	copyWitness(c, witness)
+	e.copyWitness(c, witness)
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -129,17 +117,29 @@ func IsSolved(circuit, witness frontend.Circuit, field *big.Int, opts ...TestEng
 	log.Debug().Msg("running circuit in test engine")
 	cptAdd, cptMul, cptSub, cptToBinary, cptFromBinary, cptAssertIsEqual = 0, 0, 0, 0, 0, 0
 
-	// first we reset the stateful blueprints
-	for i := range e.blueprints {
-		if b, ok := e.blueprints[i].(constraint.BlueprintStateful); ok {
-			b.Reset()
+	// XXX(@ivokub): commented out - this seems to match the implementation of native solver,
+	// but we always create new test engine when calling `IsSolved`, so this slice is always empty.
+	// Skipping this allows us to avoid making test engine generic.
+	/*
+		// first we reset the stateful blueprints
+		for i := range e.blueprints {
+			if b, ok := e.blueprints[i].(constraint.BlueprintStateful); ok {
+				b.Reset()
+			}
 		}
+	*/
+
+	var apiEngine frontend.API
+	if smallfields.IsSmallField(e.modulus()) && !e.noSmallFieldCompatibility {
+		apiEngine = &smallfieldEngine{engine: e}
+	} else {
+		apiEngine = e
 	}
 
-	if err = c.Define(e); err != nil {
+	if err = c.Define(apiEngine); err != nil {
 		return fmt.Errorf("define: %w", err)
 	}
-	if err = callDeferred(e); err != nil {
+	if err = callDeferred(apiEngine); err != nil {
 		return fmt.Errorf("deferred: %w", err)
 	}
 
@@ -153,7 +153,7 @@ func IsSolved(circuit, witness frontend.Circuit, field *big.Int, opts ...TestEng
 	return
 }
 
-func callDeferred(builder *engine) error {
+func callDeferred(builder frontend.API) error {
 	for i := 0; i < len(circuitdefer.GetAll[func(frontend.API) error](builder)); i++ {
 		if err := circuitdefer.GetAll[func(frontend.API) error](builder)[i](builder); err != nil {
 			return fmt.Errorf("defer fn %d: %w", i, err)
@@ -638,7 +638,7 @@ func shallowClone(circuit frontend.Circuit) frontend.Circuit {
 	return circuitCopy
 }
 
-func copyWitness(to, from frontend.Circuit) {
+func (e *engine) copyWitness(to, from frontend.Circuit) {
 	var wValues []reflect.Value
 
 	collectHandler := func(f schema.LeafInfo, tInput reflect.Value) error {
@@ -649,7 +649,7 @@ func copyWitness(to, from frontend.Circuit) {
 		wValues = append(wValues, tInput)
 		return nil
 	}
-	if _, err := schema.Walk(from, tVariable, collectHandler); err != nil {
+	if _, err := schema.Walk(e.Field(), from, tVariable, collectHandler); err != nil {
 		panic(err)
 	}
 
@@ -660,7 +660,7 @@ func copyWitness(to, from frontend.Circuit) {
 		return nil
 	}
 	// this can't error.
-	_, _ = schema.Walk(to, tVariable, setHandler)
+	_, _ = schema.Walk(e.Field(), to, tVariable, setHandler)
 
 }
 
@@ -673,6 +673,9 @@ func (e *engine) Compiler() frontend.Compiler {
 }
 
 func (e *engine) Commit(v ...frontend.Variable) (frontend.Variable, error) {
+	if smallfields.IsSmallField(e.modulus()) {
+		panic("commitment not supported for small fields")
+	}
 	nb := (e.FieldBitLen() + 7) / 8
 	buf := make([]byte, nb)
 	hasher := sha3.NewCShake128(nil, []byte("gnark test engine"))
@@ -696,10 +699,8 @@ func (e *engine) Defer(cb func(frontend.API) error) {
 	circuitdefer.Put(e, cb)
 }
 
-// AddInstruction is used to add custom instructions to the constraint system.
-// In constraint system, this is asynchronous. In here, we do it synchronously.
-func (e *engine) AddInstruction(bID constraint.BlueprintID, calldata []uint32) []uint32 {
-	blueprint := e.blueprints[bID].(constraint.BlueprintSolvable)
+func addInstructionGeneric[E constraint.Element](e *engine, bID constraint.BlueprintID, calldata []uint32) []uint32 {
+	blueprint := e.blueprints[bID].(constraint.BlueprintSolvable[E])
 
 	// create a dummy instruction
 	inst := constraint.Instruction{
@@ -717,7 +718,7 @@ func (e *engine) AddInstruction(bID constraint.BlueprintID, calldata []uint32) [
 	}
 
 	// solve the blueprint synchronously
-	s := blueprintSolver{
+	s := blueprintSolver[E]{
 		internalVariables: e.internalVariables,
 		q:                 e.q,
 	}
@@ -728,10 +729,29 @@ func (e *engine) AddInstruction(bID constraint.BlueprintID, calldata []uint32) [
 	return r
 }
 
+// AddInstruction is used to add custom instructions to the constraint system.
+// In constraint system, this is asynchronous. In here, we do it synchronously.
+func (e *engine) AddInstruction(bID constraint.BlueprintID, calldata []uint32) []uint32 {
+	if constraint.FitsElement[constraint.U32](e.q) {
+		return addInstructionGeneric[constraint.U32](e, bID, calldata)
+	}
+	if constraint.FitsElement[constraint.U64](e.q) {
+		return addInstructionGeneric[constraint.U64](e, bID, calldata)
+	}
+	panic("unsupported field")
+}
+
 // AddBlueprint adds a custom blueprint to the constraint system.
 func (e *engine) AddBlueprint(b constraint.Blueprint) constraint.BlueprintID {
-	if _, ok := b.(constraint.BlueprintSolvable); !ok {
-		panic("unsupported blueprint in test engine")
+	if constraint.FitsElement[constraint.U32](e.q) {
+		if _, ok := b.(constraint.BlueprintSolvable[constraint.U32]); !ok {
+			panic("unsupported blueprint in test engine")
+		}
+	}
+	if constraint.FitsElement[constraint.U64](e.q) {
+		if _, ok := b.(constraint.BlueprintSolvable[constraint.U64]); !ok {
+			panic("unsupported blueprint in test engine")
+		}
 	}
 	e.blueprints = append(e.blueprints, b)
 	return constraint.BlueprintID(len(e.blueprints) - 1)
@@ -751,7 +771,7 @@ func (e *engine) InternalVariable(vID uint32) frontend.Variable {
 // this is used in custom blueprints to return a variable than can be encoded in blueprints
 func (e *engine) ToCanonicalVariable(v frontend.Variable) frontend.CanonicalVariable {
 	r := e.toBigInt(v)
-	return wrappedBigInt{r}
+	return wrappedBigInt{Int: r, modulus: e.q}
 }
 
 func (e *engine) SetGkrInfo(info constraint.GkrInfo) error {
@@ -780,4 +800,38 @@ func (e *engine) MustBeLessOrEqCst(aBits []frontend.Variable, bound *big.Int, aF
 	if v.Cmp(bound) > 0 {
 		panic(fmt.Sprintf("%d > %d", v, bound))
 	}
+}
+
+type smallfieldEngine struct {
+	*engine
+}
+
+func (e *smallfieldEngine) WideCommit(width int, v ...frontend.Variable) ([]frontend.Variable, error) {
+	nb := (e.FieldBitLen() + 7) / 8
+	buf := make([]byte, nb)
+	hasher := sha3.NewCShake128(nil, []byte("gnark test engine"))
+	for i := range v {
+		vs := e.toBigInt(v[i])
+		bs := vs.FillBytes(buf)
+		hasher.Write(bs)
+	}
+	res := make([]frontend.Variable, width)
+	for i := 0; i < width; i++ {
+		hasher.Read(buf)
+		resi := new(big.Int).SetBytes(buf)
+		resi.Mod(resi, e.modulus())
+		res[i] = new(big.Int).Set(resi)
+	}
+	return res, nil
+}
+
+func (e *smallfieldEngine) Check(in frontend.Variable, width int) {
+	bin := e.toBigInt(in)
+	if bin.BitLen() > width {
+		panic(fmt.Sprintf("range check failed: %s (bitLen == %d) with %d bits", bin.String(), bin.BitLen(), width))
+	}
+}
+
+func (e *smallfieldEngine) Compiler() frontend.Compiler {
+	return e
 }

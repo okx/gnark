@@ -26,10 +26,10 @@ func New[Base, Scalars emulated.FieldParams](api frontend.API, params CurveParam
 	}
 	emuGm := make([]AffinePoint[Base], len(params.Gm))
 	for i, v := range params.Gm {
-		emuGm[i] = AffinePoint[Base]{emulated.ValueOf[Base](v[0]), emulated.ValueOf[Base](v[1])}
+		emuGm[i] = AffinePoint[Base]{*ba.NewElement(v[0]), *ba.NewElement(v[1])}
 	}
-	Gx := emulated.ValueOf[Base](params.Gx)
-	Gy := emulated.ValueOf[Base](params.Gy)
+	Gx := ba.NewElement(params.Gx)
+	Gy := ba.NewElement(params.Gy)
 	var eigenvalue *emulated.Element[Scalars]
 	var thirdRootOne *emulated.Element[Base]
 	if params.Eigenvalue != nil && params.ThirdRootOne != nil {
@@ -42,12 +42,12 @@ func New[Base, Scalars emulated.FieldParams](api frontend.API, params CurveParam
 		baseApi:   ba,
 		scalarApi: sa,
 		g: AffinePoint[Base]{
-			X: Gx,
-			Y: Gy,
+			X: *Gx,
+			Y: *Gy,
 		},
 		gm:           emuGm,
-		a:            emulated.ValueOf[Base](params.A),
-		b:            emulated.ValueOf[Base](params.B),
+		a:            *ba.NewElement(params.A),
+		b:            *ba.NewElement(params.B),
 		addA:         params.A.Cmp(big.NewInt(0)) != 0,
 		eigenvalue:   eigenvalue,
 		thirdRootOne: thirdRootOne,
@@ -188,20 +188,17 @@ func (c *Curve[B, S]) AssertIsEqual(p, q *AffinePoint[B]) {
 //
 // It uses incomplete formulas in affine coordinates.
 func (c *Curve[B, S]) add(p, q *AffinePoint[B]) *AffinePoint[B] {
+	mone := c.baseApi.NewElement(-1)
 	// compute λ = (q.y-p.y)/(q.x-p.x)
 	qypy := c.baseApi.Sub(&q.Y, &p.Y)
 	qxpx := c.baseApi.Sub(&q.X, &p.X)
 	λ := c.baseApi.Div(qypy, qxpx)
 
 	// xr = λ²-p.x-q.x
-	λλ := c.baseApi.MulMod(λ, λ)
-	qxpx = c.baseApi.Add(&p.X, &q.X)
-	xr := c.baseApi.Sub(λλ, qxpx)
+	xr := c.baseApi.Eval([][]*emulated.Element[B]{{λ, λ}, {mone, c.baseApi.Add(&p.X, &q.X)}}, []int{1, 1})
 
 	// p.y = λ(p.x-r.x) - p.y
-	pxrx := c.baseApi.Sub(&p.X, xr)
-	λpxrx := c.baseApi.MulMod(λ, pxrx)
-	yr := c.baseApi.Sub(λpxrx, &p.Y)
+	yr := c.baseApi.Eval([][]*emulated.Element[B]{{λ, c.baseApi.Sub(&p.X, xr)}, {mone, &p.Y}}, []int{1, 1})
 
 	return &AffinePoint[B]{
 		X: *c.baseApi.Reduce(xr),
@@ -217,14 +214,15 @@ func (c *Curve[B, S]) AssertIsOnCurve(p *AffinePoint[B]) {
 	selector := c.api.And(c.baseApi.IsZero(&p.X), c.baseApi.IsZero(&p.Y))
 	b := c.baseApi.Select(selector, c.baseApi.Zero(), &c.b)
 
-	left := c.baseApi.Mul(&p.Y, &p.Y)
-	right := c.baseApi.Mul(&p.X, c.baseApi.Mul(&p.X, &p.X))
-	right = c.baseApi.Add(right, b)
-	if c.addA {
-		ax := c.baseApi.Mul(&c.a, &p.X)
-		right = c.baseApi.Add(right, ax)
+	mone := c.baseApi.NewElement(-1)
+
+	var check *emulated.Element[B]
+	if !c.addA {
+		check = c.baseApi.Eval([][]*emulated.Element[B]{{&p.X, &p.X, &p.X}, {b}, {mone, &p.Y, &p.Y}}, []int{1, 1, 1})
+	} else {
+		check = c.baseApi.Eval([][]*emulated.Element[B]{{&p.X, &p.X, &p.X}, {&c.a, &p.X}, {b}, {mone, &p.Y, &p.Y}}, []int{1, 1, 1, 1})
 	}
-	c.baseApi.AssertIsEqual(left, right)
+	c.baseApi.AssertIsEqual(check, c.baseApi.Zero())
 }
 
 // AddUnified adds p and q and returns it. It doesn't modify p nor q.
@@ -296,6 +294,7 @@ func (c *Curve[B, S]) Add(p, q *AffinePoint[B]) *AffinePoint[B] {
 // It uses affine coordinates.
 func (c *Curve[B, S]) double(p *AffinePoint[B]) *AffinePoint[B] {
 
+	mone := c.baseApi.NewElement(-1)
 	// compute λ = (3p.x²+a)/2*p.y, here we assume a=0 (j invariant 0 curve)
 	xx3a := c.baseApi.MulMod(&p.X, &p.X)
 	xx3a = c.baseApi.MulConst(xx3a, big.NewInt(3))
@@ -306,14 +305,10 @@ func (c *Curve[B, S]) double(p *AffinePoint[B]) *AffinePoint[B] {
 	λ := c.baseApi.Div(xx3a, y2)
 
 	// xr = λ²-2p.x
-	x2 := c.baseApi.MulConst(&p.X, big.NewInt(2))
-	λλ := c.baseApi.MulMod(λ, λ)
-	xr := c.baseApi.Sub(λλ, x2)
+	xr := c.baseApi.Eval([][]*emulated.Element[B]{{λ, λ}, {mone, &p.X}}, []int{1, 2})
 
 	// yr = λ(p-xr) - p.y
-	pxrx := c.baseApi.Sub(&p.X, xr)
-	λpxrx := c.baseApi.MulMod(λ, pxrx)
-	yr := c.baseApi.Sub(λpxrx, &p.Y)
+	yr := c.baseApi.Eval([][]*emulated.Element[B]{{λ, c.baseApi.Sub(&p.X, xr)}, {mone, &p.Y}}, []int{1, 1})
 
 	return &AffinePoint[B]{
 		X: *c.baseApi.Reduce(xr),
@@ -334,6 +329,7 @@ func (c *Curve[B, S]) double(p *AffinePoint[B]) *AffinePoint[B] {
 // [ELM03]: https://arxiv.org/pdf/math/0208038.pdf
 func (c *Curve[B, S]) triple(p *AffinePoint[B]) *AffinePoint[B] {
 
+	mone := c.baseApi.NewElement(-1)
 	// compute λ1 = (3p.x²+a)/2p.y, here we assume a=0 (j invariant 0 curve)
 	xx := c.baseApi.MulMod(&p.X, &p.X)
 	xx = c.baseApi.MulConst(xx, big.NewInt(3))
@@ -344,9 +340,7 @@ func (c *Curve[B, S]) triple(p *AffinePoint[B]) *AffinePoint[B] {
 	λ1 := c.baseApi.Div(xx, y2)
 
 	// xr = λ1²-2p.x
-	x2 := c.baseApi.MulConst(&p.X, big.NewInt(2))
-	λ1λ1 := c.baseApi.MulMod(λ1, λ1)
-	x2 = c.baseApi.Sub(λ1λ1, x2)
+	x2 := c.baseApi.Eval([][]*emulated.Element[B]{{λ1, λ1}, {mone, &p.X}}, []int{1, 2})
 
 	// omit y2 computation, and
 	// compute λ2 = 2p.y/(x2 − p.x) − λ1.
@@ -355,14 +349,10 @@ func (c *Curve[B, S]) triple(p *AffinePoint[B]) *AffinePoint[B] {
 	λ2 = c.baseApi.Sub(λ2, λ1)
 
 	// xr = λ²-p.x-x2
-	λ2λ2 := c.baseApi.MulMod(λ2, λ2)
-	qxrx := c.baseApi.Add(x2, &p.X)
-	xr := c.baseApi.Sub(λ2λ2, qxrx)
+	xr := c.baseApi.Eval([][]*emulated.Element[B]{{λ2, λ2}, {mone, &p.X}, {mone, x2}}, []int{1, 1, 1})
 
 	// yr = λ(p.x-xr) - p.y
-	pxrx := c.baseApi.Sub(&p.X, xr)
-	λ2pxrx := c.baseApi.MulMod(λ2, pxrx)
-	yr := c.baseApi.Sub(λ2pxrx, &p.Y)
+	yr := c.baseApi.Eval([][]*emulated.Element[B]{{λ2, c.baseApi.Sub(&p.X, xr)}, {mone, &p.Y}}, []int{1, 1})
 
 	return &AffinePoint[B]{
 		X: *c.baseApi.Reduce(xr),
@@ -383,31 +373,29 @@ func (c *Curve[B, S]) triple(p *AffinePoint[B]) *AffinePoint[B] {
 // [ELM03]: https://arxiv.org/pdf/math/0208038.pdf
 func (c *Curve[B, S]) doubleAndAdd(p, q *AffinePoint[B]) *AffinePoint[B] {
 
+	mone := c.baseApi.NewElement(-1)
 	// compute λ1 = (q.y-p.y)/(q.x-p.x)
 	yqyp := c.baseApi.Sub(&q.Y, &p.Y)
-	xqxp := c.baseApi.Sub(&q.X, &p.X)
+	xpn := c.baseApi.Neg(&p.X)
+	xqxp := c.baseApi.Add(&q.X, xpn)
 	λ1 := c.baseApi.Div(yqyp, xqxp)
 
 	// compute x2 = λ1²-p.x-q.x
-	λ1λ1 := c.baseApi.MulMod(λ1, λ1)
-	xqxp = c.baseApi.Add(&p.X, &q.X)
-	x2 := c.baseApi.Sub(λ1λ1, xqxp)
+	x2 := c.baseApi.Eval([][]*emulated.Element[B]{{λ1, λ1}, {mone, c.baseApi.Add(&p.X, &q.X)}}, []int{1, 1})
 
 	// omit y2 computation
-	// compute λ2 = λ1+2*p.y/(x2-p.x)
+
+	// compute -λ2 = λ1+2*p.y/(x2-p.x)
 	ypyp := c.baseApi.MulConst(&p.Y, big.NewInt(2))
-	x2xp := c.baseApi.Sub(x2, &p.X)
+	x2xp := c.baseApi.Add(x2, xpn)
 	λ2 := c.baseApi.Div(ypyp, x2xp)
 	λ2 = c.baseApi.Add(λ1, λ2)
 
-	// compute x3 =λ2²-p.x-x2
-	λ2λ2 := c.baseApi.MulMod(λ2, λ2)
-	x3 := c.baseApi.Sub(λ2λ2, c.baseApi.Add(&p.X, x2))
+	// compute x3 = (-λ2)²-p.x-x2
+	x3 := c.baseApi.Eval([][]*emulated.Element[B]{{λ2, λ2}, {mone, &p.X}, {mone, x2}}, []int{1, 1, 1})
 
-	// compute y3 = λ2*(-p.x + x3)-p.y
-	y3 := c.baseApi.Sub(x3, &p.X)
-	y3 = c.baseApi.Mul(λ2, y3)
-	y3 = c.baseApi.Sub(y3, &p.Y)
+	// compute y3 = -λ2*(x3 - p.x)-p.y
+	y3 := c.baseApi.Eval([][]*emulated.Element[B]{{λ2, c.baseApi.Add(x3, xpn)}, {mone, &p.Y}}, []int{1, 1})
 
 	return &AffinePoint[B]{
 		X: *c.baseApi.Reduce(x3),
@@ -425,35 +413,31 @@ func (c *Curve[B, S]) doubleAndAdd(p, q *AffinePoint[B]) *AffinePoint[B] {
 // and then based on a Select adds either p or q.
 func (c *Curve[B, S]) doubleAndAddSelect(b frontend.Variable, p, q *AffinePoint[B]) *AffinePoint[B] {
 
+	mone := c.baseApi.NewElement(-1)
 	// compute λ1 = (q.y-p.y)/(q.x-p.x)
 	yqyp := c.baseApi.Sub(&q.Y, &p.Y)
 	xqxp := c.baseApi.Sub(&q.X, &p.X)
 	λ1 := c.baseApi.Div(yqyp, xqxp)
 
 	// compute x2 = λ1²-p.x-q.x
-	λ1λ1 := c.baseApi.MulMod(λ1, λ1)
-	xqxp = c.baseApi.Add(&p.X, &q.X)
-	x2 := c.baseApi.Sub(λ1λ1, xqxp)
+	x2 := c.baseApi.Eval([][]*emulated.Element[B]{{λ1, λ1}, {mone, &p.X}, {mone, &q.X}}, []int{1, 1, 1})
 
 	// omit y2 computation
 
 	// conditional second addition
 	t := c.Select(b, p, q)
 
-	// compute λ2 = λ1+2*t.y/(x2-t.x)
+	// compute -λ2 = λ1+2*t.y/(x2-t.x)
 	ypyp := c.baseApi.MulConst(&t.Y, big.NewInt(2))
 	x2xp := c.baseApi.Sub(x2, &t.X)
 	λ2 := c.baseApi.Div(ypyp, x2xp)
 	λ2 = c.baseApi.Add(λ1, λ2)
 
-	// compute x3 =λ2²-t.x-x2
-	λ2λ2 := c.baseApi.MulMod(λ2, λ2)
-	x3 := c.baseApi.Sub(λ2λ2, c.baseApi.Add(&t.X, x2))
+	// compute x3 = (-λ2)²-t.x-x2
+	x3 := c.baseApi.Eval([][]*emulated.Element[B]{{λ2, λ2}, {mone, &t.X}, {mone, x2}}, []int{1, 1, 1})
 
-	// compute y3 = -λ2*(t.x - x3)-t.y
-	y3 := c.baseApi.Sub(x3, &t.X)
-	y3 = c.baseApi.Mul(λ2, y3)
-	y3 = c.baseApi.Sub(y3, &t.Y)
+	// compute y3 = -λ2*(x3 - t.x)-t.y
+	y3 := c.baseApi.Eval([][]*emulated.Element[B]{{λ2, x3}, {mone, λ2, &t.X}, {mone, &t.Y}}, []int{1, 1, 1})
 
 	return &AffinePoint[B]{
 		X: *c.baseApi.Reduce(x3),
@@ -508,6 +492,8 @@ func (c *Curve[B, S]) Mux(sel frontend.Variable, inputs ...*AffinePoint[B]) *Aff
 // This function doesn't check that the p is on the curve. See AssertIsOnCurve.
 //
 // ScalarMul calls scalarMulFakeGLV or scalarMulGLVAndFakeGLV depending on whether an efficient endomorphism is available.
+//
+// The result is undefined when the input point is not on the prime order subgroup.
 func (c *Curve[B, S]) ScalarMul(p *AffinePoint[B], s *emulated.Element[S], opts ...algopts.AlgebraOption) *AffinePoint[B] {
 	if c.eigenvalue != nil && c.thirdRootOne != nil {
 		return c.scalarMulGLVAndFakeGLV(p, s, opts...)
@@ -742,6 +728,9 @@ func (c *Curve[B, S]) scalarMulGLV(Q *AffinePoint[B], s *emulated.Element[S], op
 // positions 1 and n-1 outside of the loop to optimize the number of
 // constraints using [ELM03] (Section 3.1)
 //
+// Contrary to the GLV method, this method doesn't require the endomorphism and
+// thus is also suitable for points not in the prime order subgroup.
+//
 // [ELM03]: https://arxiv.org/pdf/math/0208038.pdf
 // [EVM]: https://ethereum.github.io/yellowpaper/paper.pdf
 // [Joye07]: https://www.iacr.org/archive/ches2007/47270135/47270135.pdf
@@ -867,8 +856,8 @@ func (c *Curve[B, S]) jointScalarMulGLV(p1, p2 *AffinePoint[B], s1, s2 *emulated
 		panic(fmt.Sprintf("parse opts: %v", err))
 	}
 	if cfg.CompleteArithmetic {
-		res1 := c.scalarMulGLV(p1, s1, opts...)
-		res2 := c.scalarMulGLV(p2, s2, opts...)
+		res1 := c.scalarMulGLVAndFakeGLV(p1, s1, opts...)
+		res2 := c.scalarMulGLVAndFakeGLV(p2, s2, opts...)
 		return c.AddUnified(res1, res2)
 	} else {
 		return c.jointScalarMulGLVUnsafe(p1, p2, s1, s2)
@@ -1110,10 +1099,10 @@ func (c *Curve[B, S]) jointScalarMulGLVUnsafe(Q, R *AffinePoint[B], s, t *emulat
 
 // ScalarMulBase computes [s]g and returns it where g is the fixed curve generator. It doesn't modify p nor s.
 //
-// ScalarMul calls scalarMulBaseGeneric or scalarMulGLV depending on whether an efficient endomorphism is available.
+// ScalarMul calls scalarMulBaseGeneric or scalarMulGLVAndFakeGLV depending on whether an efficient endomorphism is available.
 func (c *Curve[B, S]) ScalarMulBase(s *emulated.Element[S], opts ...algopts.AlgebraOption) *AffinePoint[B] {
 	if c.eigenvalue != nil && c.thirdRootOne != nil {
-		return c.scalarMulGLV(c.Generator(), s, opts...)
+		return c.scalarMulGLVAndFakeGLV(c.Generator(), s, opts...)
 
 	} else {
 		return c.scalarMulBaseGeneric(s, opts...)
@@ -1298,9 +1287,26 @@ func (c *Curve[B, S]) scalarMulFakeGLV(Q *AffinePoint[B], s *emulated.Element[S]
 	// Then we compute the hinted scalar mul R = [s]Q
 	// Q coordinates are in Fp and the scalar s in Fr
 	// we decompose Q.X, Q.Y, s into limbs and recompose them in the hint.
+
+	// but first - in some edge cases it is possible that we compute the scalar multiplication
+	// for a constant scalar and constant point. This happens when the recursive SNARK verifier
+	// is used with a static verification key for example. Usually, the non-native element is always
+	// lazily initialized during witness parsing, circuit compilation and non-native arithmetic time.
+	// However here none of the cases applies and we perform operation directly on limbs of non-native element.
+	// So we initialize it here.
+	Q.X.Initialize(c.api.Compiler().Field())
+	Q.Y.Initialize(c.api.Compiler().Field())
+	s.Initialize(c.api.Compiler().Field())
+
 	var inps []frontend.Variable
+	_, effNbBitsB := emulated.GetEffectiveFieldParams[B](c.api.Compiler().Field())
+	_, effNbBitsS := emulated.GetEffectiveFieldParams[S](c.api.Compiler().Field())
+	inps = append(inps, effNbBitsB, effNbBitsS)
+	inps = append(inps, len(Q.X.Limbs))
 	inps = append(inps, Q.X.Limbs...)
+	inps = append(inps, len(Q.Y.Limbs))
 	inps = append(inps, Q.Y.Limbs...)
+	inps = append(inps, len(s.Limbs))
 	inps = append(inps, s.Limbs...)
 	R, err := c.baseApi.NewHintWithNativeInput(scalarMulHint, 2, inps...)
 	if err != nil {
@@ -1534,6 +1540,8 @@ func (c *Curve[B, S]) scalarMulFakeGLV(Q *AffinePoint[B], s *emulated.Element[S]
 // (0,0) is not on the curve but we conventionally take it as the
 // neutral/infinity point as per the [EVM].
 //
+// The result is undefined for input points that are not in the prime subgroup.
+//
 // TODO @yelhousni: generalize for any supported curve as it currently supports only:
 // BN254, BLS12-381, BW6-761 and Secp256k1.
 //
@@ -1581,7 +1589,7 @@ func (c *Curve[B, S]) scalarMulGLVAndFakeGLV(P *AffinePoint[B], s *emulated.Elem
 	//
 	// The hint returns u1, u2, v1, v2.
 	// In-circuit we check that (v1 + λ*v2)*s = (u1 + λ*u2) mod r
-	sd, err := c.scalarApi.NewHint(halfGCDEisenstein, 5, _s, c.eigenvalue)
+	sd, err := c.scalarApi.NewHint(halfGCDEisenstein, 4, _s, c.eigenvalue)
 	if err != nil {
 		// err is non-nil only for invalid number of inputs
 		panic(err)
@@ -1591,7 +1599,7 @@ func (c *Curve[B, S]) scalarMulGLVAndFakeGLV(P *AffinePoint[B], s *emulated.Elem
 	// Eisenstein integers real and imaginary parts can be negative. So we
 	// return the absolute value in the hint and negate the corresponding
 	// points here when needed.
-	signs, err := c.scalarApi.NewHintWithNativeOutput(halfGCDEisensteinSigns, 5, _s, c.eigenvalue)
+	signs, err := c.scalarApi.NewHintWithNativeOutput(halfGCDEisensteinSigns, 4, _s, c.eigenvalue)
 	if err != nil {
 		panic(fmt.Sprintf("halfGCDSigns hint: %v", err))
 	}
@@ -1628,9 +1636,26 @@ func (c *Curve[B, S]) scalarMulGLVAndFakeGLV(P *AffinePoint[B], s *emulated.Elem
 	// Next we compute the hinted scalar mul Q = [s]P
 	// P coordinates are in Fp and the scalar s in Fr
 	// we decompose Q.X, Q.Y, s into limbs and recompose them in the hint.
+
+	// but first - in some edge cases it is possible that we compute the scalar multiplication
+	// for a constant scalar and constant point. This happens when the recursive SNARK verifier
+	// is used with a static verification key for example. Usually, the non-native element is always
+	// lazily initialized during witness parsing, circuit compilation and non-native arithmetic time.
+	// However here none of the cases applies and we perform operation directly on limbs of non-native element.
+	// So we initialize it here.
+	P.X.Initialize(c.api.Compiler().Field())
+	P.Y.Initialize(c.api.Compiler().Field())
+	s.Initialize(c.api.Compiler().Field())
+
 	var inps []frontend.Variable
+	_, effNbBitsB := emulated.GetEffectiveFieldParams[B](c.api.Compiler().Field())
+	_, effNbBitsS := emulated.GetEffectiveFieldParams[S](c.api.Compiler().Field())
+	inps = append(inps, effNbBitsB, effNbBitsS)
+	inps = append(inps, len(P.X.Limbs))
 	inps = append(inps, P.X.Limbs...)
+	inps = append(inps, len(P.Y.Limbs))
 	inps = append(inps, P.Y.Limbs...)
+	inps = append(inps, len(s.Limbs))
 	inps = append(inps, s.Limbs...)
 	point, err := c.baseApi.NewHintWithNativeInput(scalarMulHint, 2, inps...)
 	if err != nil {

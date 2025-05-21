@@ -845,7 +845,7 @@ func TestIssue348UnconstrainedLimbs(t *testing.T) {
 	// for freshly initialised elements (using NewElement, or directly by
 	// constructing the structure), we do not automatically enforce the widths.
 	//
-	// The bug is tracked in https://github.com/ConsenSys/gnark/issues/348
+	// The bug is tracked in https://github.com/Consensys/gnark/issues/348
 	a := big.NewInt(5)
 	b, _ := new(big.Int).SetString("21888242871839275222246405745257275088548364400416034343698204186575808495612", 10)
 	assert := test.NewAssert(t)
@@ -890,6 +890,7 @@ func testAssertIsInRange[T FieldParams](t *testing.T) {
 		witness := AssertInRangeCircuit[T]{X: ValueOf[T](X)}
 		assert.CheckCircuit(&circuit, test.WithValidAssignment(&witness))
 		witness2 := AssertInRangeCircuit[T]{X: ValueOf[T](0)}
+		witness2.X.Limbs = make([]frontend.Variable, fp.NbLimbs())
 		t := 0
 		for i := 0; i < int(fp.NbLimbs())-1; i++ {
 			L := new(big.Int).Lsh(big.NewInt(1), fp.BitsPerLimb())
@@ -917,6 +918,9 @@ func (c *IsZeroCircuit[T]) Define(api frontend.API) error {
 	}
 	R := f.Add(&c.X, &c.Y)
 	api.AssertIsEqual(c.Zero, f.IsZero(R))
+
+	isZero := f.IsZero(f.Zero())
+	api.AssertIsEqual(isZero, 1)
 	return nil
 }
 
@@ -1482,7 +1486,7 @@ func (c *FastPathsCircuit[T]) Define(api frontend.API) error {
 	return nil
 }
 
-func TestFasthPaths(t *testing.T) {
+func TestFastPaths(t *testing.T) {
 	testFastPaths[Goldilocks](t)
 	testFastPaths[BN254Fr](t)
 	testFastPaths[emparams.Mod1e512](t)
@@ -1496,4 +1500,51 @@ func testFastPaths[T FieldParams](t *testing.T) {
 	assignment := &FastPathsCircuit[T]{Rand: ValueOf[T](randVal), Zero: ValueOf[T](0)}
 
 	assert.CheckCircuit(circuit, test.WithValidAssignment(assignment))
+}
+
+type TestAssertIsDifferentCircuit[T FieldParams] struct {
+	A, B   Element[T]
+	addMod bool
+}
+
+func (c *TestAssertIsDifferentCircuit[T]) Define(api frontend.API) error {
+	f, err := NewField[T](api)
+	if err != nil {
+		return err
+	}
+	b := &c.B
+	if c.addMod {
+		b = f.Add(b, f.Modulus())
+	}
+	f.AssertIsDifferent(&c.A, b)
+	return nil
+}
+
+func TestAssertIsDifferent(t *testing.T) {
+	testAssertIsDifferent[Goldilocks](t)
+	testAssertIsDifferent[Secp256k1Fp](t)
+	testAssertIsDifferent[BN254Fp](t)
+}
+
+func testAssertIsDifferent[T FieldParams](t *testing.T) {
+	assert := test.NewAssert(t)
+	circuitNoMod := &TestAssertIsDifferentCircuit[T]{addMod: false}
+	var fp T
+	a, _ := rand.Int(rand.Reader, fp.Modulus())
+	assignment1 := &TestAssertIsDifferentCircuit[T]{A: ValueOf[T](a), B: ValueOf[T](a)}
+	var b *big.Int
+	for {
+		b, _ = rand.Int(rand.Reader, fp.Modulus())
+		if b.Cmp(a) == 0 {
+			continue
+		}
+		break
+	}
+	assignment2 := &TestAssertIsDifferentCircuit[T]{A: ValueOf[T](a), B: ValueOf[T](b)}
+	assert.CheckCircuit(circuitNoMod, test.WithInvalidAssignment(assignment1), test.WithValidAssignment(assignment2))
+
+	circuitWithMod := &TestAssertIsDifferentCircuit[T]{addMod: true}
+	assignment3 := &TestAssertIsDifferentCircuit[T]{A: ValueOf[T](a), B: ValueOf[T](a)}
+	assignment4 := &TestAssertIsDifferentCircuit[T]{A: ValueOf[T](a), B: ValueOf[T](b)}
+	assert.CheckCircuit(circuitWithMod, test.WithInvalidAssignment(assignment3), test.WithValidAssignment(assignment4))
 }

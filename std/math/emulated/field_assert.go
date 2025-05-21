@@ -103,12 +103,17 @@ func (f *Field[T]) AssertIsInRange(a *Element[T]) {
 // method internally reduces the element and asserts that the value is less than
 // the modulus.
 func (f *Field[T]) IsZero(a *Element[T]) frontend.Variable {
+	// fast path - when the element is on zero limbs, then it is always zero
+	if a.isStrictZero() {
+		return 1
+	}
+
 	// to avoid using strict reduction (which is expensive as requires binary
 	// assertion that value is less than modulus), we use ordinary reduction but
 	// in this case the result can be either 0 or p (if it is zero).
 	//
 	// so we check that the reduced value limbs are either all zeros or
-	// corrspond to the modulus limbs.
+	// correspond to the modulus limbs.
 	ca := f.Reduce(a)
 	p := f.Modulus()
 
@@ -148,6 +153,14 @@ func (f *Field[T]) IsZero(a *Element[T]) frontend.Variable {
 	return f.api.Or(res0, resP)
 }
 
+// AssertIsDifferent asserts that a and b are different.
+func (f *Field[T]) AssertIsDifferent(a, b *Element[T]) {
+	// we skip conditional width checking as it is done in [Sub] below
+	diff := f.Sub(a, b)
+	diffIsZero := f.IsZero(diff)
+	f.api.AssertIsEqual(diffIsZero, 0)
+}
+
 // // Cmp returns:
 // //   - -1 if a < b
 // //   - 0 if a = b
@@ -166,19 +179,4 @@ func (f *Field[T]) IsZero(a *Element[T]) frontend.Variable {
 // 		res = f.api.Select(f.api.IsZero(res), lmbCmp, res)
 // 	}
 // 	return res
-// }
-
-// TODO(@ivokub)
-// func (f *Field[T]) AssertIsDifferent(a, b *Element[T]) {
-// 	ca := f.Reduce(a)
-// 	f.AssertIsInRange(ca)
-// 	cb := f.Reduce(b)
-// 	f.AssertIsInRange(cb)
-// 	var res frontend.Variable = 0
-// 	for i := 0; i < int(f.fParams.NbLimbs()); i++ {
-// 		cmp := f.api.Cmp(ca.Limbs[i], cb.Limbs[i])
-// 		cmpsq := f.api.Mul(cmp, cmp)
-// 		res = f.api.Add(res, cmpsq)
-// 	}
-// 	f.api.AssertIsDifferent(res, 0)
 // }

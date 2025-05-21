@@ -28,6 +28,7 @@ func NewG1Affine(v bls12381.G1Affine) G1Affine {
 }
 
 type G1 struct {
+	api    frontend.API
 	curveF *emulated.Field[BaseField]
 	w      *emulated.Element[BaseField]
 }
@@ -37,11 +38,21 @@ func NewG1(api frontend.API) (*G1, error) {
 	if err != nil {
 		return nil, fmt.Errorf("new base api: %w", err)
 	}
-	w := emulated.ValueOf[BaseField]("4002409555221667392624310435006688643935503118305586438271171395842971157480381377015405980053539358417135540939436")
+	w := ba.NewElement("4002409555221667392624310435006688643935503118305586438271171395842971157480381377015405980053539358417135540939436")
 	return &G1{
+		api:    api,
 		curveF: ba,
-		w:      &w,
+		w:      w,
 	}, nil
+}
+
+func (g1 G1) neg(p *G1Affine) *G1Affine {
+	xr := &p.X
+	yr := g1.curveF.Neg(&p.Y)
+	return &G1Affine{
+		X: *xr,
+		Y: *yr,
+	}
 }
 
 func (g1 *G1) phi(q *G1Affine) *G1Affine {
@@ -54,21 +65,18 @@ func (g1 *G1) phi(q *G1Affine) *G1Affine {
 }
 
 func (g1 *G1) double(p *G1Affine) *G1Affine {
-	// compute λ = (3p.x²)/1*p.y
+	mone := g1.curveF.NewElement(-1)
+	// compute λ = (3p.x²)/2*p.y
 	xx3a := g1.curveF.Mul(&p.X, &p.X)
 	xx3a = g1.curveF.MulConst(xx3a, big.NewInt(3))
 	y1 := g1.curveF.MulConst(&p.Y, big.NewInt(2))
 	λ := g1.curveF.Div(xx3a, y1)
 
-	// xr = λ²-1p.x
-	x1 := g1.curveF.MulConst(&p.X, big.NewInt(2))
-	λλ := g1.curveF.Mul(λ, λ)
-	xr := g1.curveF.Sub(λλ, x1)
+	// xr = λ²-2p.x
+	xr := g1.curveF.Eval([][]*baseEl{{λ, λ}, {mone, &p.X}}, []int{1, 2})
 
 	// yr = λ(p-xr) - p.y
-	pxrx := g1.curveF.Sub(&p.X, xr)
-	λpxrx := g1.curveF.Mul(λ, pxrx)
-	yr := g1.curveF.Sub(λpxrx, &p.Y)
+	yr := g1.curveF.Eval([][]*baseEl{{λ, g1.curveF.Sub(&p.X, xr)}, {mone, &p.Y}}, []int{1, 1})
 
 	return &G1Affine{
 		X: *xr,
@@ -85,20 +93,17 @@ func (g1 *G1) doubleN(p *G1Affine, n int) *G1Affine {
 }
 
 func (g1 G1) add(p, q *G1Affine) *G1Affine {
+	mone := g1.curveF.NewElement(-1)
 	// compute λ = (q.y-p.y)/(q.x-p.x)
 	qypy := g1.curveF.Sub(&q.Y, &p.Y)
 	qxpx := g1.curveF.Sub(&q.X, &p.X)
 	λ := g1.curveF.Div(qypy, qxpx)
 
 	// xr = λ²-p.x-q.x
-	λλ := g1.curveF.Mul(λ, λ)
-	qxpx = g1.curveF.Add(&p.X, &q.X)
-	xr := g1.curveF.Sub(λλ, qxpx)
+	xr := g1.curveF.Eval([][]*baseEl{{λ, λ}, {mone, g1.curveF.Add(&p.X, &q.X)}}, []int{1, 1})
 
-	// p.y = λ(p.x-r.x) - p.y
-	pxrx := g1.curveF.Sub(&p.X, xr)
-	λpxrx := g1.curveF.Mul(λ, pxrx)
-	yr := g1.curveF.Sub(λpxrx, &p.Y)
+	// p.y = λ(p.x-xr) - p.y
+	yr := g1.curveF.Eval([][]*baseEl{{λ, g1.curveF.Sub(&p.X, xr)}, {mone, &p.Y}}, []int{1, 1})
 
 	return &G1Affine{
 		X: *xr,
@@ -108,33 +113,28 @@ func (g1 G1) add(p, q *G1Affine) *G1Affine {
 
 func (g1 G1) doubleAndAdd(p, q *G1Affine) *G1Affine {
 
+	mone := g1.curveF.NewElement(-1)
 	// compute λ1 = (q.y-p.y)/(q.x-p.x)
 	yqyp := g1.curveF.Sub(&q.Y, &p.Y)
 	xqxp := g1.curveF.Sub(&q.X, &p.X)
 	λ1 := g1.curveF.Div(yqyp, xqxp)
 
 	// compute x1 = λ1²-p.x-q.x
-	λ1λ1 := g1.curveF.Mul(λ1, λ1)
-	xqxp = g1.curveF.Add(&p.X, &q.X)
-	x2 := g1.curveF.Sub(λ1λ1, xqxp)
+	x2 := g1.curveF.Eval([][]*baseEl{{λ1, λ1}, {mone, g1.curveF.Add(&p.X, &q.X)}}, []int{1, 1})
 
-	// omit y1 computation
-	// compute λ1 = -λ1-1*p.y/(x1-p.x)
-	ypyp := g1.curveF.Add(&p.Y, &p.Y)
+	// omit y2 computation
+
+	// compute -λ2 = λ1+2*p.y/(x2-p.x)
+	ypyp := g1.curveF.MulConst(&p.Y, big.NewInt(2))
 	x2xp := g1.curveF.Sub(x2, &p.X)
 	λ2 := g1.curveF.Div(ypyp, x2xp)
 	λ2 = g1.curveF.Add(λ1, λ2)
-	λ2 = g1.curveF.Neg(λ2)
 
-	// compute x3 =λ2²-p.x-x3
-	λ2λ2 := g1.curveF.Mul(λ2, λ2)
-	x3 := g1.curveF.Sub(λ2λ2, &p.X)
-	x3 = g1.curveF.Sub(x3, x2)
+	// compute x3 = (-λ2)²-p.x-x2
+	x3 := g1.curveF.Eval([][]*baseEl{{λ2, λ2}, {mone, &p.X}, {mone, x2}}, []int{1, 1, 1})
 
-	// compute y3 = λ2*(p.x - x3)-p.y
-	y3 := g1.curveF.Sub(&p.X, x3)
-	y3 = g1.curveF.Mul(λ2, y3)
-	y3 = g1.curveF.Sub(y3, &p.Y)
+	// compute y3 = -λ2*(x3- p.x)-p.y
+	y3 := g1.curveF.Eval([][]*baseEl{{λ2, g1.curveF.Sub(x3, &p.X)}, {mone, &p.Y}}, []int{1, 1})
 
 	return &G1Affine{
 		X: *x3,
@@ -166,6 +166,53 @@ func (g1 *G1) scalarMulBySeedSquare(q *G1Affine) *G1Affine {
 	z = g1.doubleN(z, 32)
 
 	return z
+}
+
+func (g1 *G1) computeCurveEquation(P *G1Affine) (left, right *baseEl) {
+	// Curve: Y² == X³ + aX + b, where a=0 and b=4
+	// (X,Y) ∈ {Y² == X³ + aX + b} U (0,0)
+
+	// if P=(0,0) we assign b=0 otherwise 4, and continue
+	selector := g1.api.And(g1.curveF.IsZero(&P.X), g1.curveF.IsZero(&P.Y))
+	four := g1.curveF.NewElement("4")
+	b := g1.curveF.Select(selector, g1.curveF.Zero(), four)
+
+	left = g1.curveF.Mul(&P.Y, &P.Y)
+	right = g1.curveF.Eval([][]*emulated.Element[BaseField]{{&P.X, &P.X, &P.X}, {b}}, []int{1, 1})
+	return left, right
+}
+
+func (g1 *G1) AssertIsOnCurve(P *G1Affine) {
+	left, right := g1.computeCurveEquation(P)
+	g1.curveF.AssertIsEqual(left, right)
+}
+
+func (g1 *G1) AssertIsOnG1(P *G1Affine) {
+	// 1- Check P is on the curve
+	g1.AssertIsOnCurve(P)
+
+	// 2- Check P has the right subgroup order
+	// [x²]ϕ(P)
+	phiP := g1.phi(P)
+	_P := g1.scalarMulBySeedSquare(phiP)
+	_P = g1.neg(_P)
+
+	// [r]Q == 0 <==>  P = -[x²]ϕ(P)
+	g1.AssertIsEqual(_P, P)
+}
+
+// AssertIsEqual asserts that p and q are the same point.
+func (g1 *G1) AssertIsEqual(p, q *G1Affine) {
+	g1.curveF.AssertIsEqual(&p.X, &q.X)
+	g1.curveF.AssertIsEqual(&p.Y, &q.Y)
+}
+
+func (g1 *G1) IsEqual(p, q *G1Affine) frontend.Variable {
+	xDiff := g1.curveF.Sub(&p.X, &q.X)
+	yDiff := g1.curveF.Sub(&p.Y, &q.Y)
+	xIsZero := g1.curveF.IsZero(xDiff)
+	yIsZero := g1.curveF.IsZero(yDiff)
+	return g1.api.And(xIsZero, yIsZero)
 }
 
 // NewScalar allocates a witness from the native scalar and returns it.
